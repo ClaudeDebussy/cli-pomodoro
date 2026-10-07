@@ -1,0 +1,69 @@
+# pomo
+
+A full-screen terminal pomodoro timer for Linux.
+
+`pomo` runs a 25-minute work timer and then queues a 5-minute break that waits for you to start it. Every 4th pomodoro, the break it queues is a 15-minute long break instead. Each kind of event plays its own quiet sound and sends a desktop notification.
+
+## Install
+
+```
+make
+sudo make install          # binary + man page into /usr/local
+```
+
+Needs a C++17 compiler. Sounds use `pw-play`, `paplay` or `canberra-gtk-play`, whichever is installed. Notifications use `notify-send`.
+
+## Usage
+
+```
+pomo                 # start a 25 minute pomodoro
+pomo -w 50 -s 10     # 50 min work, 10 min short break
+pomo -n sound        # notify with sound only
+pomo -m              # start minimized, pop back up when a timer ends
+```
+
+| Option | Meaning | Default |
+|---|---|---|
+| `-w N` | work minutes | 25 |
+| `-s N` | short break minutes | 5 |
+| `-l N` | long break minutes | 15 |
+| `-e N` | long break every N pomodoros | 4 |
+| `-n MODE` | `sound`, `desktop`, `both`, `bell`, `none` | both |
+| `-m` | start minimized | off |
+
+### Keys
+
+| Key | Action |
+|---|---|
+| space / Enter / `p` | pause, resume, or start a waiting timer |
+| `5` / `0` | add 5 / 10 minutes |
+| `r` | restart the current timer |
+| `b` | start the break now |
+| `w` | start work now |
+| `q` | quit |
+
+## Configuration
+
+Put defaults in `~/.config/pomo/config`:
+
+```
+work = 25
+short = 5
+long = 15
+every = 4
+notify = both
+minimized = no
+```
+
+See `man pomo` for every setting, including the sound for each event.
+
+## Minimize and restore (GNOME on Wayland)
+
+Wayland doesn't let terminal programs minimize or raise their own window. For `-m` to work, and for clicking a notification to bring the timer back, install the bundled GNOME Shell extension:
+
+```
+make install-extension     # then log out and back in
+gnome-extensions enable pomo@ajchurchill
+```
+
+The extension finds pomo's window by its title, `pomo [PID]`, so the pomo tab has to be the visible tab in its window. Without the extension, pomo sends the standard xterm minimize/restore codes, which only some terminals honor.
