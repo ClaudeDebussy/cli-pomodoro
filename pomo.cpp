@@ -138,7 +138,7 @@ void draw(const string &title, int secs, const string &status, const string &col
         if (status[i] == '\033') while (i < status.size() && status[i] != 'm') ++i;
         else if ((status[i] & 0xC0) != 0x80) ++slen;
     center(top + 8, status, slen);
-    for (size_t i = 0; i < keys.size(); ++i) center(top + 11 + i, "\033[2m" + keys[i] + "\033[0m", keys[i].size());
+    if (focused) for (size_t i = 0; i < keys.size(); ++i) center(top + 11 + i, "\033[2m" + keys[i] + "\033[0m", keys[i].size());
     if (shown) center(top + 15, "\033[1mHistory\033[0m", 7);
     for (int i = 0; i < shown; ++i) {  // newest first
         const string &h = hist[hist.size() - 1 - i];

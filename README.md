@@ -46,7 +46,7 @@ pomo -m              # start minimized, pop back up when a timer ends
 | `w` | start work now |
 | `q` | quit |
 
-A history of finished timers is shown under the timer, newest first. When a timer is waiting for you to press space, it slowly fades in and out.
+A history of finished timers is shown under the timer, newest first. The key hints hide while the window is unfocused. When a timer is waiting for you to press space, it slowly fades in and out.
 
 ## Configuration
 
