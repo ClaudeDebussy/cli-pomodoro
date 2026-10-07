@@ -56,6 +56,7 @@ bool ext(const string &method, const string &args) {
 // Whether our terminal has focus, from focus reports (ESC [ I / ESC [ O). Starts focused unless minimized.
 bool focused = true;
 bool muted = false;  // toggled with m
+bool bar = false;    // toggled with v: progress bar instead of digits
 
 void notify(const string &msg, const string &sound) {
     const string &n = cfg["notify"];
@@ -100,7 +101,7 @@ const char *FONT[11][5] = {
 };
 
 void draw(const string &title, int secs, const string &status, const string &color, const vector<string> &keys,
-          const vector<string> &hist) {
+          const vector<string> &hist, double frac, bool bar) {
     winsize w{};
     ioctl(1, TIOCGWINSZ, &w);
     int cols = w.ws_col ? w.ws_col : 80, rows = w.ws_row ? w.ws_row : 24;
@@ -115,10 +116,21 @@ void draw(const string &title, int secs, const string &status, const string &col
     };
     printf("\033[H\033[2J");
     center(top, "\033[1m" + title + "\033[0m", title.size());
-    for (int r = 0; r < 5; ++r) {
+    if (bar) {  // progress bar instead of digits, same 5 rows
+        static const char *EIGHTHS[] = {"", "▏", "▎", "▍", "▌", "▋", "▊", "▉"};
+        int bw = min(60, cols - 8), cells = (int)(max(0.0, min(1.0, frac)) * bw * 8);
         string line = color;
-        for (char *p = t; *p; ++p) line += string(FONT[*p == ':' ? 10 : *p - '0'][r]) + " ";
-        center(top + 2 + r, line + "\033[0m", width);
+        for (int i = 0; i < cells / 8; ++i) line += "█";
+        line += EIGHTHS[cells % 8];
+        line += "\033[0m\033[2m";
+        for (int i = cells / 8 + (cells % 8 > 0); i < bw; ++i) line += "░";
+        for (int r = 0; r < 5; ++r) center(top + 2 + r, line + "\033[0m", bw);
+    } else {
+        for (int r = 0; r < 5; ++r) {
+            string line = color;
+            for (char *p = t; *p; ++p) line += string(FONT[*p == ':' ? 10 : *p - '0'][r]) + " ";
+            center(top + 2 + r, line + "\033[0m", width);
+        }
     }
     center(top + 8, status, status.size());
     for (size_t i = 0; i < keys.size(); ++i) center(top + 11 + i, "\033[2m" + keys[i] + "\033[0m", keys[i].size());
@@ -227,8 +239,8 @@ int main(int argc, char **argv) {
         vector<string> keys = {
             string("space ") + (running ? "pause" : waiting ? "start" : "resume") +
                 "     1/5/0 +1/5/10m     + add n min     r restart",
-            string(phase == WORK ? "b break" : "w work") + "     m " + (muted ? "unmute" : "mute") + "     q quit"};
-        draw(title, (int)(left + 0.999), status, color, keys, hist);
+            string(phase == WORK ? "b break" : "w work") + "     m " + (muted ? "unmute" : "mute") + "     v " + (bar ? "digits" : "bar") + "     q quit"};
+        draw(title, (int)(left + 0.999), status, color, keys, hist, ran / max(1.0, ran + left), bar);
 
         pollfd p{0, POLLIN, 0};
         if (poll(&p, 1, 200) > 0) {
@@ -254,10 +266,11 @@ int main(int argc, char **argv) {
                 case '+': case '=': typing = true; adding.clear(); break;
                 case '1': left += 60; break;
                 case 'm': muted = !muted; break;
+                case 'v': bar = !bar; break;
                 case ' ': case '\n': case 'p': running = !running; waiting = false; break;
                 case '5': left += 300; break;
                 case '0': left += 600; break;
-                case 'r': left = total; break;
+                case 'r': left = total; ran = 0; break;
                 case 'b': if (phase == WORK) { if (!waiting) log(true); go_break(true); } break;
                 case 'w': if (phase != WORK) { if (!waiting) log(true); set_phase(WORK, true); } break;
                 case 'q': return 0;

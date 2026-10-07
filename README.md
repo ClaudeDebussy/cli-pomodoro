@@ -39,6 +39,7 @@ pomo -m              # start minimized, pop back up when a timer ends
 | `1` / `5` / `0` | add 1 / 5 / 10 minutes |
 | `+` | add any number of minutes (type it, then Enter) |
 | `m` | mute / unmute sounds |
+| `v` | switch between digits and a progress bar (no numbers) |
 | `r` | restart the current timer |
 | `b` | start the break now |
 | `w` | start work now |
