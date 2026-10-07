@@ -186,6 +186,7 @@ int main(int argc, char **argv) {
     double ran = 0;            // seconds actually run in this timer
     string adding;             // digits typed after '+', while entering a custom amount
     bool typing = false;
+    bool setting = false;      // typing a new length (s) rather than minutes to add (+)
     bool running = true;       // false = paused or waiting to start
     bool waiting = false;      // break/work queued but not started yet
     double total, left;        // seconds
@@ -236,7 +237,7 @@ int main(int argc, char **argv) {
         string title = phase == WORK ? "POMODORO #" + to_string(done + 1)
                      : phase == SHORT ? "SHORT BREAK" : "LONG BREAK";
         string color = phase == WORK ? "\033[31m" : "\033[32m";
-        string status = typing ? "Add minutes: " + adding + "_   (Enter to add, Esc to cancel)"
+        string status = typing ? string(setting ? "Set minutes: " : "Add minutes: ") + adding + "_   (Enter to " + (setting ? "set" : "add") + ", Esc to cancel)"
                       : waiting ? "Ready — press space to start" : running ? "Running" : "Paused";
         if (!typing && muted) status += "   [muted]";
         if (!typing) status += "   (" + to_string(done) + " done, long break every " + to_string(every) + ")";
@@ -252,8 +253,8 @@ int main(int argc, char **argv) {
         } else if (!running) color = "\033[2m" + color;
         vector<string> keys = {
             string("space ") + (running ? "pause" : waiting ? "start" : "resume") +
-                "     1/5/0 +1/5/10m     + add n min     r restart",
-            string(phase == WORK ? "b break" : "w work") + "     m " + (muted ? "unmute" : "mute") + "     v " + (bar ? "digits" : "bar") + "     q quit"};
+                "     1/5/0 +1/5/10m     + add n min     s set n min",
+            string(phase == WORK ? "b break" : "w work") + "     m " + (muted ? "unmute" : "mute") + "     v " + (bar ? "digits" : "bar") + "     r restart     q quit"};
         draw(title, (int)(left + 0.999), status, color, keys, hist, ran / max(1.0, ran + left), bar);
 
         pollfd p{0, POLLIN, 0};
@@ -272,12 +273,17 @@ int main(int argc, char **argv) {
             if (typing) {
                 if (isdigit((unsigned char)k) && adding.size() < 4) adding += k;
                 else if ((k == 127 || k == 8) && !adding.empty()) adding.pop_back();
-                else if (k == '\n' || k == '\r') { if (!adding.empty()) left += 60.0 * stoi(adding); typing = false; }
+                else if (k == '\n' || k == '\r') {
+                    if (!adding.empty() && setting) total = left = 60.0 * stoi(adding);
+                    else if (!adding.empty()) left += 60.0 * stoi(adding);
+                    typing = false;
+                }
                 else if (k == 27) typing = false;
                 continue;
             }
             switch (k) {
-                case '+': case '=': typing = true; adding.clear(); break;
+                case '+': case '=': typing = true; setting = false; adding.clear(); break;
+                case 's': typing = true; setting = true; adding.clear(); break;
                 case '1': left += 60; break;
                 case 'm': muted = !muted; break;
                 case 'v': bar = !bar; break;
