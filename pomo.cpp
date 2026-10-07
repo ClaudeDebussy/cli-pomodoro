@@ -57,8 +57,12 @@ bool ext(const string &method, const string &args) {
 bool focused = true;
 
 void notify(const string &msg, const string &sound) {
-    if (focused) return;  // you're looking at it already
     const string &n = cfg["notify"];
+    if (n == "bell") printf("\a");
+    if (n == "sound" || n == "both")
+        (void)!system(("(pw-play '" + sound + "' || paplay '" + sound + "' || canberra-gtk-play -f '" + sound +
+                       "' || printf '\\a') >/dev/null 2>&1 &").c_str());
+    if (focused) return;  // sound always plays; the rest is pointless when you're looking at it
     bool sticky = cfg["minimized"] == "yes";
     if (sticky && !ext("Activate", "")) printf("\033[1t");  // fallback: xterm-style un-minimize
     if (n == "desktop" || n == "both" || sticky) {
@@ -67,10 +71,6 @@ void notify(const string &msg, const string &sound) {
             (void)!system(("notify-send -a pomo " + string(sticky ? "-u critical " : "") + "'Pomodoro' '" + msg +
                            "' >/dev/null 2>&1 &").c_str());
     }
-    if (n == "bell") printf("\a");
-    if (n == "sound" || n == "both")
-        (void)!system(("(pw-play '" + sound + "' || paplay '" + sound + "' || canberra-gtk-play -f '" + sound +
-                       "' || printf '\\a') >/dev/null 2>&1 &").c_str());
 }
 
 // ---- terminal ----
