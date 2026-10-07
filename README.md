@@ -46,7 +46,7 @@ pomo -m              # start minimized, pop back up when a timer ends
 | `w` | start work now |
 | `q` | quit |
 
-A history of finished timers is shown under the timer, newest first. While the window is unfocused, only the timer (or bar) is shown, in the same spot. When a timer is waiting for you to press space, it slowly fades in and out.
+A history of finished timers is shown under the timer, newest first. While the window is unfocused, only the timer (or bar) is shown, in the same spot. In a window narrower than 62 columns, only the timer is shown, centered. When a timer is waiting for you to press space, it slowly fades in and out.
 
 ## Configuration
 

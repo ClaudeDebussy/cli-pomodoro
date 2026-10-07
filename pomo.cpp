@@ -78,7 +78,7 @@ void notify(const string &msg, const string &sound) {
 
 // ---- terminal ----
 termios orig;
-void restore() { printf("\033[?1004l\033[0m\033[?25h\033[?1049l"); fflush(stdout); tcsetattr(0, TCSANOW, &orig); }
+void restore() { printf("\033[?1004l\033[?7h\033[0m\033[?25h\033[?1049l"); fflush(stdout); tcsetattr(0, TCSANOW, &orig); }
 void on_signal(int) { restore(); _exit(0); }
 void setup_term() {
     tcgetattr(0, &orig);
@@ -88,7 +88,7 @@ void setup_term() {
     atexit(restore);
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
-    printf("\033[?1049h\033[?25l\033[?1004h");  // alt screen, hide cursor, report focus changes
+    printf("\033[?1049h\033[?25l\033[?1004h\033[?7l");  // alt screen, hide cursor, report focus, no line wrap
 }
 
 // 5-row block font for 0-9 and ':'
@@ -112,14 +112,16 @@ void draw(const string &title, int secs, const string &status, const string &col
     for (char *p = t; *p; ++p) width += (*p == ':' ? 3 : 5) + 1;
     int shown = min((int)hist.size(), max(0, rows - 17));  // history lines that fit
     int top = max(1, (rows - 13 - (shown ? shown + 2 : 0)) / 2);
+    bool small = cols < 62, extras = focused && !small;  // small window: just the timer, centered
+    if (small) top = max(-1, (rows - 5) / 2 - 1);
     auto center = [&](int row, const string &s, int len) {
         printf("\033[%d;%dH%s", row, max(1, (cols - len) / 2 + 1), s.c_str());
     };
     printf("\033[H\033[2J");
-    if (focused) center(top, "\033[1m" + title + "\033[0m", title.size());
+    if (extras) center(top, "\033[1m" + title + "\033[0m", title.size());
     if (bar) {  // progress bar instead of digits, same 5 rows
         static const char *EIGHTHS[] = {"", "▏", "▎", "▍", "▌", "▋", "▊", "▉"};
-        int bw = min(60, cols - 8), cells = (int)(max(0.0, min(1.0, frac)) * bw * 8);
+        int bw = small ? max(1, cols - 4) : min(60, cols - 8), cells = (int)(max(0.0, min(1.0, frac)) * bw * 8);
         string line = color;
         for (int i = 0; i < cells / 8; ++i) line += "█";
         line += EIGHTHS[cells % 8];
@@ -137,7 +139,7 @@ void draw(const string &title, int secs, const string &status, const string &col
     for (size_t i = 0; i < status.size(); ++i)
         if (status[i] == '\033') while (i < status.size() && status[i] != 'm') ++i;
         else if ((status[i] & 0xC0) != 0x80) ++slen;
-    if (focused) {  // unfocused: just the timer, at the same spot
+    if (extras) {  // unfocused: just the timer, at the same spot
         center(top + 8, status, slen);
         for (size_t i = 0; i < keys.size(); ++i) center(top + 11 + i, "\033[2m" + keys[i] + "\033[0m", keys[i].size());
         if (shown) center(top + 15, "\033[1mHistory\033[0m", 7);
