@@ -112,7 +112,12 @@ void draw(const string &title, int secs, const string &status, const string &col
     for (char *p = t; *p; ++p) width += (*p == ':' ? 3 : 5) + 1;
     int shown = min((int)hist.size(), max(0, rows - 17));  // history lines that fit
     int top = max(1, (rows - 13 - (shown ? shown + 2 : 0)) / 2);
-    bool small = cols < 62, extras = focused && !small;  // small window: just the timer, centered
+    // dragging the window edge takes focus away, so keep everything visible for a moment after a resize
+    static int lastc = cols, lastr = rows;
+    static auto resized = Clock::now() - chrono::seconds(10);
+    if (cols != lastc || rows != lastr) lastc = cols, lastr = rows, resized = Clock::now();
+    bool resizing = Clock::now() - resized < chrono::milliseconds(1500);
+    bool small = cols < 62, extras = (focused || resizing) && !small;  // small window: just the timer, centered
     if (small) top = max(-1, (rows - 5) / 2 - 1);
     auto center = [&](int row, const string &s, int len) {
         printf("\033[%d;%dH%s", row, max(1, (cols - len) / 2 + 1), s.c_str());
