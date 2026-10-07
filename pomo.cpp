@@ -1,5 +1,6 @@
 // pomo - a dead simple pomodoro timer
 #include <cctype>
+#include <cmath>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -132,7 +133,11 @@ void draw(const string &title, int secs, const string &status, const string &col
             center(top + 2 + r, line + "\033[0m", width);
         }
     }
-    center(top + 8, status, status.size());
+    int slen = 0;  // visible width: skip color codes and UTF-8 continuation bytes
+    for (size_t i = 0; i < status.size(); ++i)
+        if (status[i] == '\033') while (i < status.size() && status[i] != 'm') ++i;
+        else if ((status[i] & 0xC0) != 0x80) ++slen;
+    center(top + 8, status, slen);
     for (size_t i = 0; i < keys.size(); ++i) center(top + 11 + i, "\033[2m" + keys[i] + "\033[0m", keys[i].size());
     if (shown) center(top + 15, "\033[1mHistory\033[0m", 7);
     for (int i = 0; i < shown; ++i) {  // newest first
@@ -235,7 +240,16 @@ int main(int argc, char **argv) {
                       : waiting ? "Ready — press space to start" : running ? "Running" : "Paused";
         if (!typing && muted) status += "   [muted]";
         if (!typing) status += "   (" + to_string(done) + " done, long break every " + to_string(every) + ")";
-        if (!running) color = "\033[2m" + color;
+        if (waiting) {  // slow fade in and out so it's obvious pomo is waiting for space
+            double t = chrono::duration<double>(now.time_since_epoch()).count();
+            double b = 0.6 + 0.4 * cos(t * 2 * M_PI / 2.5);
+            int r = phase == WORK ? 220 : 80, g = phase == WORK ? 60 : 200, bl = phase == WORK ? 60 : 100;
+            char c[32];
+            snprintf(c, sizeof c, "\033[38;2;%d;%d;%dm", (int)(r * b), (int)(g * b), (int)(bl * b));
+            color = c;
+            snprintf(c, sizeof c, "\033[38;2;%d;%d;%dm", (int)(230 * b), (int)(230 * b), (int)(230 * b));
+            status = c + status + "\033[0m";
+        } else if (!running) color = "\033[2m" + color;
         vector<string> keys = {
             string("space ") + (running ? "pause" : waiting ? "start" : "resume") +
                 "     1/5/0 +1/5/10m     + add n min     r restart",
@@ -243,7 +257,7 @@ int main(int argc, char **argv) {
         draw(title, (int)(left + 0.999), status, color, keys, hist, ran / max(1.0, ran + left), bar);
 
         pollfd p{0, POLLIN, 0};
-        if (poll(&p, 1, 200) > 0) {
+        if (poll(&p, 1, waiting ? 50 : 200) > 0) {
             char k;
             if (read(0, &k, 1) != 1) break;
             if (k == 27) {  // escape sequence? focus reports are ESC [ I and ESC [ O
