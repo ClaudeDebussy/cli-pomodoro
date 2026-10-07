@@ -128,6 +128,34 @@ void draw(const string &title, int secs, const string &status, const string &col
         line += "\033[0m\033[2m";
         for (int i = cells / 8 + (cells % 8 > 0); i < bw; ++i) line += "░";
         for (int r = 0; r < 5; ++r) center(top + 2 + r, line + "\033[0m", bw);
+    } else if (small) {  // scale the digits up to fill the window, using half blocks for finer height
+        vector<string> rowsrc(5);  // the 5-row digits as a plain bitmap, '#' = on
+        for (int r = 0; r < 5; ++r)
+            for (char *p = t; *p; ++p) rowsrc[r] += string(FONT[*p == ':' ? 10 : *p - '0'][r]) + " ";
+        int nw = width - 1;  // drop the trailing space
+        auto on = [&](int x, int y) {
+            const string &s = rowsrc[y];
+            int i = 0;  // walk UTF-8: each glyph is either ' ' or a 3-byte '█'
+            for (size_t b = 0; b < s.size(); ++i) {
+                if (i == x) return s[b] != ' ';
+                b += s[b] == ' ' ? 1 : 3;
+            }
+            return false;
+        };
+        int W = cols - 4;  // fill the width, then as much height as fits, stretched at most 1.3x taller
+        int h2 = min(2 * (rows - 2), (int)lround(1.3 * 2.0 * W * 5 / nw));  // height in half rows
+        W = min(W, (int)lround(1.3 * h2 / 2.0 * nw / 5));
+        if (W < nw || h2 < 10) W = nw, h2 = 10;  // never shrink below the normal size
+        int hr = (h2 + 1) / 2, top2 = max(1, (rows - hr) / 2 + 1);
+        for (int r = 0; r < hr; ++r) {
+            string line = color;
+            for (int x = 0; x < W; ++x) {
+                int sx = x * nw / W;
+                bool u = on(sx, 2 * r * 5 / h2), d = 2 * r + 1 < h2 && on(sx, (2 * r + 1) * 5 / h2);
+                line += u && d ? "█" : u ? "▀" : d ? "▄" : " ";
+            }
+            center(top2 + r, line + "\033[0m", W);
+        }
     } else {
         for (int r = 0; r < 5; ++r) {
             string line = color;
