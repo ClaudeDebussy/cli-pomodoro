@@ -12,6 +12,9 @@ a short break (5 minutes) is queued but not started. Every fourth pomodoro a
 long break (15 minutes) is queued instead. When a break ends, the next
 pomodoro is queued the same way. Work is shown in red, breaks in green, and a
 paused or queued timer is dimmed.
+.PP
+Notifications (sound, desktop, bell, and un-minimizing) are skipped while the pomo terminal has focus, since you can already see it. Focus is detected with terminal focus reporting; in a terminal without it, pomo assumes it is focused unless started with
+.BR \-m .
 .SH KEYS
 Under the timer, a history lists each finished timer, newest first: the time it ended, its name, how long it actually ran, and whether it was ended early with
 .B b

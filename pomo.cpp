@@ -53,7 +53,11 @@ bool ext(const string &method, const string &args) {
                    " >/dev/null 2>&1").c_str()) == 0;
 }
 
+// Whether our terminal has focus, from focus reports (ESC [ I / ESC [ O). Starts focused unless minimized.
+bool focused = true;
+
 void notify(const string &msg, const string &sound) {
+    if (focused) return;  // you're looking at it already
     const string &n = cfg["notify"];
     bool sticky = cfg["minimized"] == "yes";
     if (sticky && !ext("Activate", "")) printf("\033[1t");  // fallback: xterm-style un-minimize
@@ -71,7 +75,7 @@ void notify(const string &msg, const string &sound) {
 
 // ---- terminal ----
 termios orig;
-void restore() { printf("\033[0m\033[?25h\033[?1049l"); fflush(stdout); tcsetattr(0, TCSANOW, &orig); }
+void restore() { printf("\033[?1004l\033[0m\033[?25h\033[?1049l"); fflush(stdout); tcsetattr(0, TCSANOW, &orig); }
 void on_signal(int) { restore(); _exit(0); }
 void setup_term() {
     tcgetattr(0, &orig);
@@ -81,7 +85,7 @@ void setup_term() {
     atexit(restore);
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
-    printf("\033[?1049h\033[?25l");  // alt screen, hide cursor
+    printf("\033[?1049h\033[?25l\033[?1004h");  // alt screen, hide cursor, report focus changes
 }
 
 // 5-row block font for 0-9 and ':'
@@ -153,6 +157,7 @@ int main(int argc, char **argv) {
     printf("\033]0;%s\007", tag.c_str());  // window title, so the extension can find us
     fflush(stdout);
     if (cfg["minimized"] == "yes") {
+        focused = false;
         usleep(200000);  // give the terminal a moment to apply the title
         if (!ext("Minimize", "")) printf("\033[2t");
     }
@@ -226,6 +231,15 @@ int main(int argc, char **argv) {
         if (poll(&p, 1, 200) > 0) {
             char k;
             if (read(0, &k, 1) != 1) break;
+            if (k == 27) {  // escape sequence? focus reports are ESC [ I and ESC [ O
+                char seq[2];
+                pollfd q{0, POLLIN, 0};
+                if (poll(&q, 1, 20) > 0 && read(0, seq, 2) == 2 && seq[0] == '[') {
+                    if (seq[1] == 'I') focused = true;
+                    if (seq[1] == 'O') focused = false;
+                    continue;  // ignore other sequences (arrow keys etc.)
+                }
+            }
             if (typing) {
                 if (isdigit((unsigned char)k) && adding.size() < 4) adding += k;
                 else if ((k == 127 || k == 8) && !adding.empty()) adding.pop_back();
