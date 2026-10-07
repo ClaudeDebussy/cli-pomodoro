@@ -13,11 +13,13 @@ long break (15 minutes) is queued instead. When a break ends, the next
 pomodoro is queued the same way. Work is shown in red, breaks in green, and a
 paused or queued timer is dimmed.
 .PP
-Sounds and the bell always play (use
+Sounds and the bell always play unless muted with
+.B m
+(or turned off with
 .B \-n desktop
 or
-.B \-n none
-to mute them). Desktop notifications and un-minimizing are skipped while the pomo terminal has focus, since you can already see it. Focus is detected with terminal focus reporting; in a terminal without it, pomo assumes it is focused unless started with
+.BR "\-n none" ).
+Desktop notifications and un-minimizing are skipped while the pomo terminal has focus, since you can already see it. Focus is detected with terminal focus reporting; in a terminal without it, pomo assumes it is focused unless started with
 .BR \-m .
 .SH KEYS
 Under the timer, a history lists each finished timer, newest first: the time it ended, its name, how long it actually ran, and whether it was ended early with
@@ -39,6 +41,9 @@ Add 10 minutes.
 .TP
 .B +
 Add any number of minutes: type the number, then Enter. Esc cancels.
+.TP
+.B m
+Mute or unmute sounds and the bell. Desktop notifications still appear.
 .TP
 .B r
 Restart the current timer from its full length.

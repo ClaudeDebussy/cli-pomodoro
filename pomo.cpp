@@ -55,11 +55,12 @@ bool ext(const string &method, const string &args) {
 
 // Whether our terminal has focus, from focus reports (ESC [ I / ESC [ O). Starts focused unless minimized.
 bool focused = true;
+bool muted = false;  // toggled with m
 
 void notify(const string &msg, const string &sound) {
     const string &n = cfg["notify"];
-    if (n == "bell") printf("\a");
-    if (n == "sound" || n == "both")
+    if (n == "bell" && !muted) printf("\a");
+    if ((n == "sound" || n == "both") && !muted)
         (void)!system(("(pw-play '" + sound + "' || paplay '" + sound + "' || canberra-gtk-play -f '" + sound +
                        "' || printf '\\a') >/dev/null 2>&1 &").c_str());
     if (focused) return;  // sound always plays; the rest is pointless when you're looking at it
@@ -220,10 +221,11 @@ int main(int argc, char **argv) {
         string color = phase == WORK ? "\033[31m" : "\033[32m";
         string status = typing ? "Add minutes: " + adding + "_   (Enter to add, Esc to cancel)"
                       : waiting ? "Ready — press space to start" : running ? "Running" : "Paused";
+        if (!typing && muted) status += "   [muted]";
         if (!typing) status += "   (" + to_string(done) + " done, long break every " + to_string(every) + ")";
         if (!running) color = "\033[2m" + color;
         string keys = string("[space] ") + (running ? "pause" : waiting ? "start" : "resume") +
-                      "  [1] +1m  [5] +5m  [0] +10m  [+] +n min  [r] restart  " +
+                      "  [1] +1m  [5] +5m  [0] +10m  [+] +n min  [r] restart  [m] " + (muted ? "unmute" : "mute") + "  " +
                       (phase == WORK ? "[b] start break" : "[w] start work") + "  [q] quit";
         draw(title, (int)(left + 0.999), status, color, keys, hist);
 
@@ -250,6 +252,7 @@ int main(int argc, char **argv) {
             switch (k) {
                 case '+': case '=': typing = true; adding.clear(); break;
                 case '1': left += 60; break;
+                case 'm': muted = !muted; break;
                 case ' ': case '\n': case 'p': running = !running; waiting = false; break;
                 case '5': left += 300; break;
                 case '0': left += 600; break;

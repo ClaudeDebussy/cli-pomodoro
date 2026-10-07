@@ -2,7 +2,7 @@
 
 A full-screen terminal pomodoro timer for Linux.
 
-`pomo` runs a 25-minute work timer and then queues a 5-minute break that waits for you to start it. Every 4th pomodoro, the break it queues is a 15-minute long break instead. Each kind of event plays its own quiet sound and sends a desktop notification. Sounds always play (mute them with `-n desktop` or `-n none`); desktop notifications are skipped while the pomo window has focus, since you can already see it.
+`pomo` runs a 25-minute work timer and then queues a 5-minute break that waits for you to start it. Every 4th pomodoro, the break it queues is a 15-minute long break instead. Each kind of event plays its own quiet sound and sends a desktop notification. Sounds always play unless you mute them with `m` (or turn them off with `-n desktop` or `-n none`); desktop notifications are skipped while the pomo window has focus, since you can already see it.
 
 ## Install
 
@@ -38,6 +38,7 @@ pomo -m              # start minimized, pop back up when a timer ends
 | space / Enter / `p` | pause, resume, or start a waiting timer |
 | `1` / `5` / `0` | add 1 / 5 / 10 minutes |
 | `+` | add any number of minutes (type it, then Enter) |
+| `m` | mute / unmute sounds |
 | `r` | restart the current timer |
 | `b` | start the break now |
 | `w` | start work now |
