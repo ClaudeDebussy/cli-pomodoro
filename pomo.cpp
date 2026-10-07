@@ -99,7 +99,7 @@ const char *FONT[11][5] = {
     {"   ", " █ ", "   ", " █ ", "   "},
 };
 
-void draw(const string &title, int secs, const string &status, const string &color, const string &keys,
+void draw(const string &title, int secs, const string &status, const string &color, const vector<string> &keys,
           const vector<string> &hist) {
     winsize w{};
     ioctl(1, TIOCGWINSZ, &w);
@@ -108,8 +108,8 @@ void draw(const string &title, int secs, const string &status, const string &col
     snprintf(t, sizeof t, "%02d:%02d", secs / 60, secs % 60);
     int width = 0;
     for (char *p = t; *p; ++p) width += (*p == ':' ? 3 : 5) + 1;
-    int shown = min((int)hist.size(), max(0, rows - 14));  // history lines that fit
-    int top = max(1, (rows - 11 - (shown ? shown + 2 : 0)) / 2);
+    int shown = min((int)hist.size(), max(0, rows - 17));  // history lines that fit
+    int top = max(1, (rows - 13 - (shown ? shown + 2 : 0)) / 2);
     auto center = [&](int row, const string &s, int len) {
         printf("\033[%d;%dH%s", row, max(1, (cols - len) / 2 + 1), s.c_str());
     };
@@ -121,11 +121,11 @@ void draw(const string &title, int secs, const string &status, const string &col
         center(top + 2 + r, line + "\033[0m", width);
     }
     center(top + 8, status, status.size());
-    center(top + 10, "\033[2m" + keys + "\033[0m", keys.size());
-    if (shown) center(top + 12, "\033[1mHistory\033[0m", 7);
+    for (size_t i = 0; i < keys.size(); ++i) center(top + 11 + i, "\033[2m" + keys[i] + "\033[0m", keys[i].size());
+    if (shown) center(top + 15, "\033[1mHistory\033[0m", 7);
     for (int i = 0; i < shown; ++i) {  // newest first
         const string &h = hist[hist.size() - 1 - i];
-        center(top + 13 + i, h, h.size());
+        center(top + 16 + i, h, h.size());
     }
     fflush(stdout);
 }
@@ -224,9 +224,10 @@ int main(int argc, char **argv) {
         if (!typing && muted) status += "   [muted]";
         if (!typing) status += "   (" + to_string(done) + " done, long break every " + to_string(every) + ")";
         if (!running) color = "\033[2m" + color;
-        string keys = string("[space] ") + (running ? "pause" : waiting ? "start" : "resume") +
-                      "  [1] +1m  [5] +5m  [0] +10m  [+] +n min  [r] restart  [m] " + (muted ? "unmute" : "mute") + "  " +
-                      (phase == WORK ? "[b] start break" : "[w] start work") + "  [q] quit";
+        vector<string> keys = {
+            string("space ") + (running ? "pause" : waiting ? "start" : "resume") +
+                "     1/5/0 +1/5/10m     + add n min     r restart",
+            string(phase == WORK ? "b break" : "w work") + "     m " + (muted ? "unmute" : "mute") + "     q quit"};
         draw(title, (int)(left + 0.999), status, color, keys, hist);
 
         pollfd p{0, POLLIN, 0};
