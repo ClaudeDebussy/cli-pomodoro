@@ -1,0 +1,95 @@
+.TH POMO 1 "October 2026" "pomo 1.0" "User Commands"
+.SH NAME
+pomo \- simple command line pomodoro timer
+.SH SYNOPSIS
+.B pomo
+[\fB\-w\fR \fImin\fR] [\fB\-s\fR \fImin\fR] [\fB\-l\fR \fImin\fR] [\fB\-e\fR \fIn\fR] [\fB\-n\fR \fItype\fR] [\fB\-m\fR]
+.SH DESCRIPTION
+.B pomo
+takes over the terminal and shows a large countdown. A work timer
+(25 minutes by default) starts right away. When it ends you are notified and
+a short break (5 minutes) is queued but not started. Every fourth pomodoro a
+long break (15 minutes) is queued instead. When a break ends, the next
+pomodoro is queued the same way. Work is shown in red, breaks in green, and a
+paused or queued timer is dimmed.
+.SH KEYS
+.TP
+.B space
+Pause, resume, or start a queued timer (\fBEnter\fR and \fBp\fR do the same).
+.TP
+.B 5
+Add 5 minutes.
+.TP
+.B 0
+Add 10 minutes.
+.TP
+.B r
+Restart the current timer from its full length.
+.TP
+.B b
+During work: end the pomodoro now (it counts) and start the break.
+.TP
+.B w
+During a break: skip the rest of it and start working.
+.TP
+.B q
+Quit (Ctrl\-C also works).
+.SH OPTIONS
+.TP
+.BI \-w " min"
+Work (pomodoro) length in minutes. Default 25.
+.TP
+.BI \-s " min"
+Short break length in minutes. Default 5.
+.TP
+.BI \-l " min"
+Long break length in minutes. Default 15.
+.TP
+.BI \-e " n"
+Take a long break every \fIn\fR pomodoros. Default 4.
+.TP
+.BI \-n " type"
+Notification type: \fBsound\fR, \fBdesktop\fR, \fBboth\fR (default),
+\fBbell\fR (terminal bell only) or \fBnone\fR.
+.TP
+.B \-m
+Start minimized. When any timer ends, the window is restored and a desktop
+notification is shown that stays until dismissed, whatever \fB\-n\fR is set
+to. Clicking a pomo notification brings the window back.
+.IP
+On GNOME (Wayland) this needs the bundled shell extension; install it with
+\fBmake install\-extension\fR, log out and back in, then run
+\fBgnome\-extensions enable pomo@ajchurchill\fR. pomo finds its window by the
+terminal title \fIpomo [PID]\fR, so the pomo tab must be the visible tab of its
+window. Without the extension, xterm window codes are used instead, which
+most Wayland terminals ignore.
+.SH CONFIGURATION
+Settings are read from \fI$XDG_CONFIG_HOME/pomo/config\fR (normally
+\fI~/.config/pomo/config\fR) as \fIkey = value\fR lines; \fB#\fR starts a
+comment. Command line options override the file. Keys:
+.PP
+.nf
+work = 25
+short = 5
+long = 15
+every = 4
+notify = both
+minimized = no
+sound_work_done  = /usr/share/sounds/freedesktop/stereo/complete.oga
+sound_break_done = /usr/share/sounds/freedesktop/stereo/message.oga
+sound_long_break = /usr/share/sounds/freedesktop/stereo/bell.oga
+.fi
+.PP
+Each event has its own sound. Any file playable by \fBpw\-play\fR,
+\fBpaplay\fR or \fBcanberra\-gtk\-play\fR works; if none is available
+the terminal bell is used.
+.SH EXAMPLES
+.TP
+.B pomo
+Standard 25/5/15 session.
+.TP
+.B pomo \-w 50 \-s 10 \-n desktop
+50 minute pomodoros, 10 minute breaks, desktop notifications only.
+.SH SEE ALSO
+.BR notify\-send (1),
+.BR pw\-play (1)
