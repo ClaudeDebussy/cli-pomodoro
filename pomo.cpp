@@ -1,11 +1,14 @@
 // pomo - a dead simple pomodoro timer
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <map>
 #include <string>
+#include <vector>
 #include <poll.h>
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -91,7 +94,8 @@ const char *FONT[11][5] = {
     {"   ", " █ ", "   ", " █ ", "   "},
 };
 
-void draw(const string &title, int secs, const string &status, const string &color, const string &keys) {
+void draw(const string &title, int secs, const string &status, const string &color, const string &keys,
+          const vector<string> &hist) {
     winsize w{};
     ioctl(1, TIOCGWINSZ, &w);
     int cols = w.ws_col ? w.ws_col : 80, rows = w.ws_row ? w.ws_row : 24;
@@ -99,7 +103,8 @@ void draw(const string &title, int secs, const string &status, const string &col
     snprintf(t, sizeof t, "%02d:%02d", secs / 60, secs % 60);
     int width = 0;
     for (char *p = t; *p; ++p) width += (*p == ':' ? 3 : 5) + 1;
-    int top = max(1, (rows - 11) / 2);
+    int shown = min((int)hist.size(), max(0, rows - 14));  // history lines that fit
+    int top = max(1, (rows - 11 - (shown ? shown + 2 : 0)) / 2);
     auto center = [&](int row, const string &s, int len) {
         printf("\033[%d;%dH%s", row, max(1, (cols - len) / 2 + 1), s.c_str());
     };
@@ -112,6 +117,11 @@ void draw(const string &title, int secs, const string &status, const string &col
     }
     center(top + 8, status, status.size());
     center(top + 10, "\033[2m" + keys + "\033[0m", keys.size());
+    if (shown) center(top + 12, "\033[1mHistory\033[0m", 7);
+    for (int i = 0; i < shown; ++i) {  // newest first
+        const string &h = hist[hist.size() - 1 - i];
+        center(top + 13 + i, h, h.size());
+    }
     fflush(stdout);
 }
 
@@ -149,14 +159,28 @@ int main(int argc, char **argv) {
 
     enum { WORK, SHORT, LONG } phase = WORK;
     int done = 0;              // completed pomodoros
+    vector<string> hist;       // log of finished timers
+    double ran = 0;            // seconds actually run in this timer
+    string adding;             // digits typed after '+', while entering a custom amount
+    bool typing = false;
     bool running = true;       // false = paused or waiting to start
     bool waiting = false;      // break/work queued but not started yet
     double total, left;        // seconds
     auto set_phase = [&](decltype(phase) p, bool start) {
         phase = p;
         total = left = 60.0 * stoi(cfg[p == WORK ? "work" : p == SHORT ? "short" : "long"]);
+        ran = 0;
         running = start;
         waiting = !start;
+    };
+    auto log = [&](bool early) {  // record the current timer before it's replaced
+        char buf[80], when[8];
+        time_t t = time(nullptr);
+        strftime(when, sizeof when, "%H:%M", localtime(&t));
+        string name = phase == WORK ? "Pomodoro #" + to_string(done + 1) : phase == SHORT ? "Short break" : "Long break";
+        int r = (int)ran;
+        snprintf(buf, sizeof buf, "%s  %-13s %3d:%02d%s", when, name.c_str(), r / 60, r % 60, early ? "  (ended early)" : "");
+        hist.push_back(buf);
     };
     auto go_break = [&](bool start) {
         ++done;
@@ -170,10 +194,15 @@ int main(int argc, char **argv) {
 
     for (;;) {
         auto now = Clock::now();
-        if (running) left -= chrono::duration<double>(now - last).count();
+        if (running) {
+            double dt = chrono::duration<double>(now - last).count();
+            left -= dt;
+            ran += dt;
+        }
         last = now;
 
         if (left <= 0) {
+            log(false);
             if (phase == WORK) go_break(false);
             else {
                 notify("Break over. Back to work.", cfg["sound_break_done"]);
@@ -184,25 +213,35 @@ int main(int argc, char **argv) {
         string title = phase == WORK ? "POMODORO #" + to_string(done + 1)
                      : phase == SHORT ? "SHORT BREAK" : "LONG BREAK";
         string color = phase == WORK ? "\033[31m" : "\033[32m";
-        string status = waiting ? "Ready — press space to start" : running ? "Running" : "Paused";
-        status += "   (" + to_string(done) + " done, long break every " + to_string(every) + ")";
+        string status = typing ? "Add minutes: " + adding + "_   (Enter to add, Esc to cancel)"
+                      : waiting ? "Ready — press space to start" : running ? "Running" : "Paused";
+        if (!typing) status += "   (" + to_string(done) + " done, long break every " + to_string(every) + ")";
         if (!running) color = "\033[2m" + color;
         string keys = string("[space] ") + (running ? "pause" : waiting ? "start" : "resume") +
-                      "  [5] +5m  [0] +10m  [r] restart  " +
+                      "  [1] +1m  [5] +5m  [0] +10m  [+] +n min  [r] restart  " +
                       (phase == WORK ? "[b] start break" : "[w] start work") + "  [q] quit";
-        draw(title, (int)(left + 0.999), status, color, keys);
+        draw(title, (int)(left + 0.999), status, color, keys, hist);
 
         pollfd p{0, POLLIN, 0};
         if (poll(&p, 1, 200) > 0) {
             char k;
             if (read(0, &k, 1) != 1) break;
+            if (typing) {
+                if (isdigit((unsigned char)k) && adding.size() < 4) adding += k;
+                else if ((k == 127 || k == 8) && !adding.empty()) adding.pop_back();
+                else if (k == '\n' || k == '\r') { if (!adding.empty()) left += 60.0 * stoi(adding); typing = false; }
+                else if (k == 27) typing = false;
+                continue;
+            }
             switch (k) {
+                case '+': case '=': typing = true; adding.clear(); break;
+                case '1': left += 60; break;
                 case ' ': case '\n': case 'p': running = !running; waiting = false; break;
                 case '5': left += 300; break;
                 case '0': left += 600; break;
                 case 'r': left = total; break;
-                case 'b': if (phase == WORK) go_break(true); break;
-                case 'w': if (phase != WORK) set_phase(WORK, true); break;
+                case 'b': if (phase == WORK) { if (!waiting) log(true); go_break(true); } break;
+                case 'w': if (phase != WORK) { if (!waiting) log(true); set_phase(WORK, true); } break;
                 case 'q': return 0;
             }
         }

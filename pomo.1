@@ -13,15 +13,25 @@ long break (15 minutes) is queued instead. When a break ends, the next
 pomodoro is queued the same way. Work is shown in red, breaks in green, and a
 paused or queued timer is dimmed.
 .SH KEYS
+Under the timer, a history lists each finished timer, newest first: the time it ended, its name, how long it actually ran, and whether it was ended early with
+.B b
+or
+.BR w .
 .TP
 .B space
 Pause, resume, or start a queued timer (\fBEnter\fR and \fBp\fR do the same).
+.TP
+.B 1
+Add 1 minute.
 .TP
 .B 5
 Add 5 minutes.
 .TP
 .B 0
 Add 10 minutes.
+.TP
+.B +
+Add any number of minutes: type the number, then Enter. Esc cancels.
 .TP
 .B r
 Restart the current timer from its full length.

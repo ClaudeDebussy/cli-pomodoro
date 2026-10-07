@@ -36,11 +36,14 @@ pomo -m              # start minimized, pop back up when a timer ends
 | Key | Action |
 |---|---|
 | space / Enter / `p` | pause, resume, or start a waiting timer |
-| `5` / `0` | add 5 / 10 minutes |
+| `1` / `5` / `0` | add 1 / 5 / 10 minutes |
+| `+` | add any number of minutes (type it, then Enter) |
 | `r` | restart the current timer |
 | `b` | start the break now |
 | `w` | start work now |
 | `q` | quit |
+
+A history of finished timers is shown under the timer, newest first.
 
 ## Configuration
 
