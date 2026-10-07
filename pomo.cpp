@@ -116,7 +116,7 @@ void draw(const string &title, int secs, const string &status, const string &col
         printf("\033[%d;%dH%s", row, max(1, (cols - len) / 2 + 1), s.c_str());
     };
     printf("\033[H\033[2J");
-    center(top, "\033[1m" + title + "\033[0m", title.size());
+    if (focused) center(top, "\033[1m" + title + "\033[0m", title.size());
     if (bar) {  // progress bar instead of digits, same 5 rows
         static const char *EIGHTHS[] = {"", "▏", "▎", "▍", "▌", "▋", "▊", "▉"};
         int bw = min(60, cols - 8), cells = (int)(max(0.0, min(1.0, frac)) * bw * 8);
@@ -137,12 +137,14 @@ void draw(const string &title, int secs, const string &status, const string &col
     for (size_t i = 0; i < status.size(); ++i)
         if (status[i] == '\033') while (i < status.size() && status[i] != 'm') ++i;
         else if ((status[i] & 0xC0) != 0x80) ++slen;
-    center(top + 8, status, slen);
-    if (focused) for (size_t i = 0; i < keys.size(); ++i) center(top + 11 + i, "\033[2m" + keys[i] + "\033[0m", keys[i].size());
-    if (shown) center(top + 15, "\033[1mHistory\033[0m", 7);
-    for (int i = 0; i < shown; ++i) {  // newest first
-        const string &h = hist[hist.size() - 1 - i];
-        center(top + 16 + i, h, h.size());
+    if (focused) {  // unfocused: just the timer, at the same spot
+        center(top + 8, status, slen);
+        for (size_t i = 0; i < keys.size(); ++i) center(top + 11 + i, "\033[2m" + keys[i] + "\033[0m", keys[i].size());
+        if (shown) center(top + 15, "\033[1mHistory\033[0m", 7);
+        for (int i = 0; i < shown; ++i) {  // newest first
+            const string &h = hist[hist.size() - 1 - i];
+            center(top + 16 + i, h, h.size());
+        }
     }
     fflush(stdout);
 }
