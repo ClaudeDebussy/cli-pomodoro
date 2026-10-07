@@ -1,4 +1,11 @@
 // pomo - a dead simple pomodoro timer
+//
+// The file is laid out top to bottom as:
+//   1. configuration (defaults, config file, command line)
+//   2. the GNOME Shell extension bridge and notifications
+//   3. raw terminal setup
+//   4. drawing the screen
+//   5. the timer state and the main loop
 #include <cctype>
 #include <cmath>
 #include <chrono>
@@ -18,170 +25,47 @@
 using namespace std;
 using Clock = chrono::steady_clock;
 
+// ============================================================================
+// 1. Configuration
+// ============================================================================
+
+// Every setting is a string; numbers are validated in validate_config().
 map<string, string> cfg = {
-    {"work", "25"}, {"short", "5"}, {"long", "15"}, {"every", "4"},
-    {"notify", "both"},  // sound | desktop | both | bell | none
+    {"work", "25"},   // minutes per pomodoro
+    {"short", "5"},   // minutes per short break
+    {"long", "15"},   // minutes per long break
+    {"every", "4"},   // a long break after every this many pomodoros
+    {"notify", "both"},   // sound | desktop | both | bell | none
     {"minimized", "no"},  // yes = start minimized, sticky alert when a timer ends
     {"sound_work_done", "/usr/share/sounds/freedesktop/stereo/complete.oga"},
     {"sound_break_done", "/usr/share/sounds/freedesktop/stereo/message.oga"},
     {"sound_long_break", "/usr/share/sounds/freedesktop/stereo/bell.oga"},
 };
 
+string trim(string s) {
+    s.erase(0, s.find_first_not_of(" \t"));
+    s.erase(s.find_last_not_of(" \t") + 1);
+    return s;
+}
+
+string config_path() {
+    const char *xdg = getenv("XDG_CONFIG_HOME");
+    if (xdg) return string(xdg) + "/pomo/config";
+    const char *home = getenv("HOME");
+    return string(home ? home : ".") + "/.config/pomo/config";
+}
+
+// Reads "key = value" lines. Blank lines and lines starting with # are ignored.
 void load_config() {
-    const char *xdg = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
-    string path = xdg ? string(xdg) + "/pomo/config" : string(home ? home : ".") + "/.config/pomo/config";
-    ifstream f(path);
-    for (string line; getline(f, line);) {
+    ifstream file(config_path());
+    for (string line; getline(file, line);) {
         if (line.empty() || line[0] == '#') continue;
-        auto eq = line.find('=');
+        size_t eq = line.find('=');
         if (eq == string::npos) continue;
-        auto trim = [](string s) {
-            s.erase(0, s.find_first_not_of(" \t"));
-            s.erase(s.find_last_not_of(" \t") + 1);
-            return s;
-        };
-        cfg[trim(line.substr(0, eq))] = trim(line.substr(eq + 1));
+        string key = trim(line.substr(0, eq));
+        string value = trim(line.substr(eq + 1));
+        cfg[key] = value;
     }
-}
-
-// Window title tag the GNOME extension uses to find our terminal window.
-string tag = "pomo [" + to_string(getpid()) + "]";
-
-// Call the pomo GNOME Shell extension (see extension/). Returns false if it isn't installed.
-bool ext(const string &method, const string &args) {
-    return system(("gdbus call --session -d org.gnome.Shell -o /org/gnome/Shell/Extensions/Pomo "
-                   "-m org.gnome.Shell.Extensions.Pomo." + method + " -- '" + tag + "' " + args +
-                   " >/dev/null 2>&1").c_str()) == 0;
-}
-
-// Whether our terminal has focus, from focus reports (ESC [ I / ESC [ O). Starts focused unless minimized.
-bool focused = true;
-bool muted = false;  // toggled with m
-bool bar = false;    // toggled with v: progress bar instead of digits
-
-void notify(const string &msg, const string &sound) {
-    const string &n = cfg["notify"];
-    if (n == "bell" && !muted) printf("\a");
-    if ((n == "sound" || n == "both") && !muted)
-        (void)!system(("(pw-play '" + sound + "' || paplay '" + sound + "' || canberra-gtk-play -f '" + sound +
-                       "' || printf '\\a') >/dev/null 2>&1 &").c_str());
-    if (focused) return;  // sound always plays; the rest is pointless when you're looking at it
-    bool sticky = cfg["minimized"] == "yes";
-    if (sticky && !ext("Activate", "")) printf("\033[1t");  // fallback: xterm-style un-minimize
-    if (n == "desktop" || n == "both" || sticky) {
-        // the extension's notification raises our window when clicked; notify-send's can't on Wayland
-        if (!ext("Notify", "'" + msg + "' " + (sticky ? "true" : "false")))
-            (void)!system(("notify-send -a pomo " + string(sticky ? "-u critical " : "") + "'Pomodoro' '" + msg +
-                           "' >/dev/null 2>&1 &").c_str());
-    }
-}
-
-// ---- terminal ----
-termios orig;
-void restore() { printf("\033[?1004l\033[?7h\033[0m\033[?25h\033[?1049l"); fflush(stdout); tcsetattr(0, TCSANOW, &orig); }
-void on_signal(int) { restore(); _exit(0); }
-void setup_term() {
-    tcgetattr(0, &orig);
-    termios raw = orig;
-    raw.c_lflag &= ~(ICANON | ECHO);
-    tcsetattr(0, TCSANOW, &raw);
-    atexit(restore);
-    signal(SIGINT, on_signal);
-    signal(SIGTERM, on_signal);
-    printf("\033[?1049h\033[?25l\033[?1004h\033[?7l");  // alt screen, hide cursor, report focus, no line wrap
-}
-
-// 5-row block font for 0-9 and ':'
-const char *FONT[11][5] = {
-    {"█████", "█   █", "█   █", "█   █", "█████"}, {"    █", "    █", "    █", "    █", "    █"},
-    {"█████", "    █", "█████", "█    ", "█████"}, {"█████", "    █", "█████", "    █", "█████"},
-    {"█   █", "█   █", "█████", "    █", "    █"}, {"█████", "█    ", "█████", "    █", "█████"},
-    {"█████", "█    ", "█████", "█   █", "█████"}, {"█████", "    █", "    █", "    █", "    █"},
-    {"█████", "█   █", "█████", "█   █", "█████"}, {"█████", "█   █", "█████", "    █", "█████"},
-    {"   ", " █ ", "   ", " █ ", "   "},
-};
-
-void draw(const string &title, int secs, const string &status, const string &color, const vector<string> &keys,
-          const vector<string> &hist, double frac, bool bar) {
-    winsize w{};
-    ioctl(1, TIOCGWINSZ, &w);
-    int cols = w.ws_col ? w.ws_col : 80, rows = w.ws_row ? w.ws_row : 24;
-    char t[16];
-    snprintf(t, sizeof t, "%02d:%02d", secs / 60, secs % 60);
-    int width = 0;
-    for (char *p = t; *p; ++p) width += (*p == ':' ? 3 : 5) + 1;
-    int shown = min((int)hist.size(), max(0, rows - 17));  // history lines that fit
-    int top = max(1, (rows - 13 - (shown ? shown + 2 : 0)) / 2);
-    // dragging the window edge takes focus away, so keep everything visible for a moment after a resize
-    static int lastc = cols, lastr = rows;
-    static auto resized = Clock::now() - chrono::seconds(10);
-    if (cols != lastc || rows != lastr) lastc = cols, lastr = rows, resized = Clock::now();
-    bool resizing = Clock::now() - resized < chrono::milliseconds(1500);
-    bool small = cols < 62, extras = (focused || resizing) && !small;  // small window: just the timer, centered
-    if (small) top = max(-1, (rows - 5) / 2 - 1);
-    auto center = [&](int row, const string &s, int len) {
-        printf("\033[%d;%dH%s", row, max(1, (cols - len) / 2 + 1), s.c_str());
-    };
-    printf("\033[H\033[2J");
-    if (extras) center(top, "\033[1m" + title + "\033[0m", title.size());
-    if (bar) {  // progress bar instead of digits, same 5 rows
-        static const char *EIGHTHS[] = {"", "▏", "▎", "▍", "▌", "▋", "▊", "▉"};
-        int bw = small ? max(1, cols - 4) : min(60, cols - 8), cells = (int)(max(0.0, min(1.0, frac)) * bw * 8);
-        string line = color;
-        for (int i = 0; i < cells / 8; ++i) line += "█";
-        line += EIGHTHS[cells % 8];
-        line += "\033[0m\033[2m";
-        for (int i = cells / 8 + (cells % 8 > 0); i < bw; ++i) line += "░";
-        for (int r = 0; r < 5; ++r) center(top + 2 + r, line + "\033[0m", bw);
-    } else if (small) {  // scale the digits up to fill the window, using half blocks for finer height
-        vector<string> rowsrc(5);  // the 5-row digits as a plain bitmap, '#' = on
-        for (int r = 0; r < 5; ++r)
-            for (char *p = t; *p; ++p) rowsrc[r] += string(FONT[*p == ':' ? 10 : *p - '0'][r]) + " ";
-        int nw = width - 1;  // drop the trailing space
-        auto on = [&](int x, int y) {
-            const string &s = rowsrc[y];
-            int i = 0;  // walk UTF-8: each glyph is either ' ' or a 3-byte '█'
-            for (size_t b = 0; b < s.size(); ++i) {
-                if (i == x) return s[b] != ' ';
-                b += s[b] == ' ' ? 1 : 3;
-            }
-            return false;
-        };
-        int W = cols - 4;  // fill the width, then as much height as fits, stretched at most 1.3x taller
-        int h2 = min(2 * (rows - 2), (int)lround(1.3 * 2.0 * W * 5 / nw));  // height in half rows
-        W = min(W, (int)lround(1.3 * h2 / 2.0 * nw / 5));
-        if (W < nw || h2 < 10) W = nw, h2 = 10;  // never shrink below the normal size
-        int hr = (h2 + 1) / 2, top2 = max(1, (rows - hr) / 2 + 1);
-        for (int r = 0; r < hr; ++r) {
-            string line = color;
-            for (int x = 0; x < W; ++x) {
-                int sx = x * nw / W;
-                bool u = on(sx, 2 * r * 5 / h2), d = 2 * r + 1 < h2 && on(sx, (2 * r + 1) * 5 / h2);
-                line += u && d ? "█" : u ? "▀" : d ? "▄" : " ";
-            }
-            center(top2 + r, line + "\033[0m", W);
-        }
-    } else {
-        for (int r = 0; r < 5; ++r) {
-            string line = color;
-            for (char *p = t; *p; ++p) line += string(FONT[*p == ':' ? 10 : *p - '0'][r]) + " ";
-            center(top + 2 + r, line + "\033[0m", width);
-        }
-    }
-    int slen = 0;  // visible width: skip color codes and UTF-8 continuation bytes
-    for (size_t i = 0; i < status.size(); ++i)
-        if (status[i] == '\033') while (i < status.size() && status[i] != 'm') ++i;
-        else if ((status[i] & 0xC0) != 0x80) ++slen;
-    if (extras) {  // unfocused: just the timer, at the same spot
-        center(top + 8, status, slen);
-        for (size_t i = 0; i < keys.size(); ++i) center(top + 11 + i, "\033[2m" + keys[i] + "\033[0m", keys[i].size());
-        if (shown) center(top + 15, "\033[1mHistory\033[0m", 7);
-        for (int i = 0; i < shown; ++i) {  // newest first
-            const string &h = hist[hist.size() - 1 - i];
-            center(top + 16 + i, h, h.size());
-        }
-    }
-    fflush(stdout);
 }
 
 void usage() {
@@ -189,10 +73,11 @@ void usage() {
     exit(1);
 }
 
-int main(int argc, char **argv) {
-    load_config();
-    for (int c; (c = getopt(argc, argv, "w:s:l:e:n:mh")) != -1;) {
-        switch (c) {
+// Command line options override the config file.
+void parse_args(int argc, char **argv) {
+    int opt;
+    while ((opt = getopt(argc, argv, "w:s:l:e:n:mh")) != -1) {
+        switch (opt) {
             case 'w': cfg["work"] = optarg; break;
             case 's': cfg["short"] = optarg; break;
             case 'l': cfg["long"] = optarg; break;
@@ -202,136 +87,574 @@ int main(int argc, char **argv) {
             default: usage();
         }
     }
-    for (const char *k : {"work", "short", "long", "every"}) {
+}
+
+// Returns false (after printing why) if a numeric setting isn't a whole number >= 1.
+bool validate_config() {
+    for (const char *key : {"work", "short", "long", "every"}) {
+        const string &value = cfg[key];
         char *end;
-        long v = strtol(cfg[k].c_str(), &end, 10);
-        if (*end || v < 1) { fprintf(stderr, "pomo: %s must be a whole number of at least 1, got '%s'\n", k, cfg[k].c_str()); return 1; }
+        long number = strtol(value.c_str(), &end, 10);
+        if (*end != '\0' || number < 1) {
+            fprintf(stderr, "pomo: %s must be a whole number of at least 1, got '%s'\n", key, value.c_str());
+            return false;
+        }
     }
-    int every = stoi(cfg["every"]);
-    setup_term();
-    printf("\033]0;%s\007", tag.c_str());  // window title, so the extension can find us
+    return true;
+}
+
+// ============================================================================
+// 2. GNOME Shell extension and notifications
+// ============================================================================
+
+// Window title tag the GNOME extension uses to find our terminal window.
+string window_tag = "pomo [" + to_string(getpid()) + "]";
+
+// Calls a method on the pomo GNOME Shell extension (see extension/).
+// Returns false if the extension isn't installed or the call failed.
+bool call_extension(const string &method, const string &args) {
+    string command = "gdbus call --session -d org.gnome.Shell -o /org/gnome/Shell/Extensions/Pomo "
+                     "-m org.gnome.Shell.Extensions.Pomo." + method +
+                     " -- '" + window_tag + "' " + args + " >/dev/null 2>&1";
+    return system(command.c_str()) == 0;
+}
+
+// Global UI state that both the notifications and the drawing code need.
+bool focused = true;     // does our terminal have focus? (from ESC [ I / ESC [ O reports)
+bool muted = false;      // toggled with m
+bool show_bar = false;   // toggled with v: progress bar instead of digits
+
+void play_sound(const string &file) {
+    // Try each common player in turn; fall back to the terminal bell.
+    string command = "(pw-play '" + file + "' || paplay '" + file + "' || canberra-gtk-play -f '" + file +
+                     "' || printf '\\a') >/dev/null 2>&1 &";
+    (void)!system(command.c_str());
+}
+
+void send_desktop_notification(const string &message, bool sticky) {
+    // The extension's notification raises our window when clicked; notify-send's can't on Wayland.
+    if (call_extension("Notify", "'" + message + "' " + (sticky ? "true" : "false"))) return;
+    string urgency = sticky ? "-u critical " : "";
+    string command = "notify-send -a pomo " + urgency + "'Pomodoro' '" + message + "' >/dev/null 2>&1 &";
+    (void)!system(command.c_str());
+}
+
+// Called when a timer runs out. Sounds always play (unless muted); the
+// window-raising and desktop notification only happen when we're not focused.
+void notify(const string &message, const string &sound) {
+    const string &mode = cfg["notify"];
+    bool wants_sound = mode == "sound" || mode == "both";
+    bool wants_desktop = mode == "desktop" || mode == "both";
+
+    if (mode == "bell" && !muted) printf("\a");
+    if (wants_sound && !muted) play_sound(sound);
+
+    if (focused) return;  // the user is already looking at us
+
+    bool sticky = cfg["minimized"] == "yes";
+    if (sticky && !call_extension("Activate", "")) printf("\033[1t");  // fallback: xterm-style un-minimize
+    if (wants_desktop || sticky) send_desktop_notification(message, sticky);
+}
+
+// ============================================================================
+// 3. Terminal
+// ============================================================================
+
+termios original_termios;
+
+void restore_terminal() {
+    // focus reports off, line wrap on, colors reset, cursor shown, leave alt screen
+    printf("\033[?1004l\033[?7h\033[0m\033[?25h\033[?1049l");
     fflush(stdout);
-    if (cfg["minimized"] == "yes") {
-        focused = false;
-        usleep(200000);  // give the terminal a moment to apply the title
-        if (!ext("Minimize", "")) printf("\033[2t");
+    tcsetattr(STDIN_FILENO, TCSANOW, &original_termios);
+}
+
+void on_signal(int) {
+    restore_terminal();
+    _exit(0);
+}
+
+void setup_terminal() {
+    tcgetattr(STDIN_FILENO, &original_termios);
+    termios raw = original_termios;
+    raw.c_lflag &= ~(ICANON | ECHO);  // read keys one at a time, don't echo them
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    atexit(restore_terminal);
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
+    // alt screen, hide cursor, report focus changes, no line wrap
+    printf("\033[?1049h\033[?25l\033[?1004h\033[?7l");
+}
+
+void set_window_title(const string &title) {
+    printf("\033]0;%s\007", title.c_str());
+    fflush(stdout);
+}
+
+// ============================================================================
+// 4. Drawing
+// ============================================================================
+
+const char *RESET = "\033[0m";
+const char *BOLD = "\033[1m";
+const char *DIM = "\033[2m";
+
+// Windows narrower than this show only the timer, centered and scaled up.
+const int NARROW_WIDTH = 62;
+// After the window size changes, show everything for this long (dragging a
+// window edge takes focus away, which would otherwise hide it all).
+const auto RESIZE_GRACE = chrono::milliseconds(1500);
+
+// Normal layout, as row offsets from the top of the block:
+//   0       title
+//   2..6    digits or progress bar (5 rows)
+//   8       status line
+//   11..12  key hints
+//   15      "History" heading
+//   16..    history entries
+const int FONT_ROWS = 5;
+const int ROW_TIMER = 2;
+const int ROW_STATUS = 8;
+const int ROW_KEYS = 11;
+const int ROW_HISTORY = 15;
+const int LAYOUT_HEIGHT = 13;  // title through key hints
+
+// 5-row block font for 0-9 (index 0-9) and ':' (index 10).
+// Digits are 5 cells wide, the colon 3.
+const char *FONT[11][FONT_ROWS] = {
+    {"█████", "█   █", "█   █", "█   █", "█████"}, {"    █", "    █", "    █", "    █", "    █"},
+    {"█████", "    █", "█████", "█    ", "█████"}, {"█████", "    █", "█████", "    █", "█████"},
+    {"█   █", "█   █", "█████", "    █", "    █"}, {"█████", "█    ", "█████", "    █", "█████"},
+    {"█████", "█    ", "█████", "█   █", "█████"}, {"█████", "    █", "    █", "    █", "    █"},
+    {"█████", "█   █", "█████", "█   █", "█████"}, {"█████", "█   █", "█████", "    █", "█████"},
+    {"   ", " █ ", "   ", " █ ", "   "},
+};
+
+const char *glyph_row(char c, int row) {
+    int index = c == ':' ? 10 : c - '0';
+    return FONT[index][row];
+}
+
+// Everything draw_screen() needs to know, prepared by the main loop.
+struct Screen {
+    string title;
+    string time;            // "MM:SS"
+    string status;          // may contain color codes
+    string color;           // color code for the digits / bar
+    vector<string> keys;    // key hint lines
+    vector<string> history; // oldest first
+    double progress;        // 0..1, for the bar view
+};
+
+struct TerminalSize {
+    int cols, rows;
+};
+
+TerminalSize terminal_size() {
+    winsize size{};
+    ioctl(STDOUT_FILENO, TIOCGWINSZ, &size);
+    return {size.ws_col ? size.ws_col : 80, size.ws_row ? size.ws_row : 24};
+}
+
+// Number of terminal cells a string takes up: skips color codes and counts
+// each UTF-8 character once.
+int visible_width(const string &s) {
+    int width = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\033') {
+            while (i < s.size() && s[i] != 'm') ++i;
+        } else if ((s[i] & 0xC0) != 0x80) {  // not a UTF-8 continuation byte
+            ++width;
+        }
+    }
+    return width;
+}
+
+void print_centered(int row, const string &text, int cols) {
+    int col = max(1, (cols - visible_width(text)) / 2 + 1);
+    printf("\033[%d;%dH%s", row, col, text.c_str());
+}
+
+// The time in the block font, one string per row, at its normal size.
+vector<string> render_digits(const string &time) {
+    vector<string> rows(FONT_ROWS);
+    for (int r = 0; r < FONT_ROWS; ++r)
+        for (char c : time) rows[r] += string(glyph_row(c, r)) + " ";
+    return rows;
+}
+
+// The time in the block font as a grid of on/off pixels, without the
+// trailing gap after the last glyph.
+vector<vector<bool>> digit_bitmap(const string &time) {
+    vector<vector<bool>> bitmap(FONT_ROWS);
+    for (int r = 0; r < FONT_ROWS; ++r) {
+        for (char c : time) {
+            const string row = glyph_row(c, r);
+            // each cell is either ' ' (1 byte) or '█' (3 bytes in UTF-8)
+            for (size_t b = 0; b < row.size(); b += row[b] == ' ' ? 1 : 3) bitmap[r].push_back(row[b] != ' ');
+            bitmap[r].push_back(false);  // gap between glyphs
+        }
+        bitmap[r].pop_back();
+    }
+    return bitmap;
+}
+
+void draw_digits(const Screen &s, int top, int cols) {
+    for (const string &row : render_digits(s.time)) {
+        print_centered(top++, s.color + row + RESET, cols);
+    }
+}
+
+// Digits scaled up to fill a small window. Each terminal row holds two pixel
+// rows using half blocks (▀ ▄ █), so the height can be scaled more finely.
+void draw_scaled_digits(const Screen &s, int cols, int rows) {
+    vector<vector<bool>> bitmap = digit_bitmap(s.time);
+    int native_width = bitmap[0].size();
+    const double max_stretch = 1.3;  // how much taller than the font's own proportions we allow
+
+    // Fill the width, then as much height as fits, then shrink the width back
+    // if the height was what limited us.
+    int width = cols - 4;
+    int half_rows = min(2 * (rows - 2), (int)lround(max_stretch * 2.0 * width * FONT_ROWS / native_width));
+    width = min(width, (int)lround(max_stretch * half_rows / 2.0 * native_width / FONT_ROWS));
+    if (width < native_width || half_rows < 2 * FONT_ROWS) {  // never shrink below the normal size
+        width = native_width;
+        half_rows = 2 * FONT_ROWS;
     }
 
-    enum { WORK, SHORT, LONG } phase = WORK;
-    int done = 0;              // completed pomodoros
-    vector<string> hist;       // log of finished timers
-    double ran = 0;            // seconds actually run in this timer
-    string adding;             // digits typed after '+', while entering a custom amount
-    bool typing = false;
-    bool setting = false;      // typing a new length (s) rather than minutes to add (+)
-    bool running = true;       // false = paused or waiting to start
-    bool waiting = false;      // break/work queued but not started yet
-    double total, left;        // seconds
-    auto set_phase = [&](decltype(phase) p, bool start) {
+    // Nearest-neighbor lookup from the scaled grid back into the bitmap.
+    auto pixel = [&](int x, int half_row) {
+        return (bool)bitmap[half_row * FONT_ROWS / half_rows][x * native_width / width];
+    };
+
+    int term_rows = (half_rows + 1) / 2;
+    int top = max(1, (rows - term_rows) / 2 + 1);
+    for (int r = 0; r < term_rows; ++r) {
+        string line = s.color;
+        for (int x = 0; x < width; ++x) {
+            bool upper = pixel(x, 2 * r);
+            bool lower = 2 * r + 1 < half_rows && pixel(x, 2 * r + 1);
+            line += upper && lower ? "█" : upper ? "▀" : lower ? "▄" : " ";
+        }
+        print_centered(top + r, line + RESET, cols);
+    }
+}
+
+// A progress bar the same 5 rows tall as the digits, with 1/8-cell precision.
+void draw_progress_bar(const Screen &s, int top, int cols, bool narrow) {
+    static const char *EIGHTHS[] = {"", "▏", "▎", "▍", "▌", "▋", "▊", "▉"};
+    int width = narrow ? max(1, cols - 4) : min(60, cols - 8);
+    double progress = max(0.0, min(1.0, s.progress));
+    int eighths = (int)(progress * width * 8);
+    int full_cells = eighths / 8, partial = eighths % 8;
+
+    string line = s.color;
+    for (int i = 0; i < full_cells; ++i) line += "█";
+    line += EIGHTHS[partial];
+    line += string(RESET) + DIM;
+    for (int i = full_cells + (partial > 0); i < width; ++i) line += "░";
+    line += RESET;
+
+    for (int r = 0; r < FONT_ROWS; ++r) print_centered(top + r, line, cols);
+}
+
+// True for a moment after the terminal changes size.
+bool recently_resized(TerminalSize size) {
+    static TerminalSize last = size;
+    static Clock::time_point resized_at = Clock::now() - chrono::seconds(10);
+    if (size.cols != last.cols || size.rows != last.rows) {
+        last = size;
+        resized_at = Clock::now();
+    }
+    return Clock::now() - resized_at < RESIZE_GRACE;
+}
+
+void draw_screen(const Screen &s) {
+    TerminalSize size = terminal_size();
+    int cols = size.cols, rows = size.rows;
+
+    bool narrow = cols < NARROW_WIDTH;
+    bool resizing = recently_resized(size);  // call every frame so it sees every size change
+    // Unfocused or narrow: just the timer. Everything else is "extras".
+    bool show_extras = !narrow && (focused || resizing);
+
+    // Vertically center the whole layout, including as much history as fits.
+    // The layout is the same whether or not extras are shown, so the timer
+    // doesn't jump around when focus changes.
+    int history_shown = min((int)s.history.size(), max(0, rows - 17));
+    int history_height = history_shown ? history_shown + 2 : 0;
+    int top = max(1, (rows - LAYOUT_HEIGHT - history_height) / 2);
+    if (narrow) top = max(-1, (rows - FONT_ROWS) / 2 - 1);  // center just the timer
+
+    printf("\033[H\033[2J");  // home and clear
+
+    if (show_bar) draw_progress_bar(s, top + ROW_TIMER, cols, narrow);
+    else if (narrow) draw_scaled_digits(s, cols, rows);
+    else draw_digits(s, top + ROW_TIMER, cols);
+
+    if (show_extras) {
+        print_centered(top, BOLD + s.title + RESET, cols);
+        print_centered(top + ROW_STATUS, s.status, cols);
+        for (size_t i = 0; i < s.keys.size(); ++i) print_centered(top + ROW_KEYS + i, DIM + s.keys[i] + RESET, cols);
+        if (history_shown) print_centered(top + ROW_HISTORY, string(BOLD) + "History" + RESET, cols);
+        for (int i = 0; i < history_shown; ++i) {  // newest first
+            print_centered(top + ROW_HISTORY + 1 + i, s.history[s.history.size() - 1 - i], cols);
+        }
+    }
+    fflush(stdout);
+}
+
+// ============================================================================
+// 5. Timer and main loop
+// ============================================================================
+
+enum Phase { WORK, SHORT_BREAK, LONG_BREAK };
+
+struct Timer {
+    Phase phase = WORK;
+    int pomodoros_done = 0;
+    int long_break_every = 4;
+    double total = 0;        // seconds this timer was set to
+    double left = 0;         // seconds remaining
+    double ran = 0;          // seconds actually run (for the history log)
+    bool running = true;     // false = paused or waiting to start
+    bool waiting = false;    // finished; the next timer is queued but not started
+    vector<string> history;  // log of finished timers, oldest first
+
+    void start_phase(Phase p, bool start_now) {
         phase = p;
-        total = left = 60.0 * stoi(cfg[p == WORK ? "work" : p == SHORT ? "short" : "long"]);
+        const char *setting = p == WORK ? "work" : p == SHORT_BREAK ? "short" : "long";
+        total = left = 60.0 * stoi(cfg[setting]);
         ran = 0;
-        running = start;
-        waiting = !start;
+        running = start_now;
+        waiting = !start_now;
+    }
+
+    string phase_name() const {
+        if (phase == WORK) return "Pomodoro #" + to_string(pomodoros_done + 1);
+        return phase == SHORT_BREAK ? "Short break" : "Long break";
+    }
+
+    // Adds the current timer to the history before it's replaced.
+    void log(bool ended_early) {
+        char when[8];
+        time_t now = time(nullptr);
+        strftime(when, sizeof when, "%H:%M", localtime(&now));
+        int seconds = (int)ran;
+        char entry[80];
+        snprintf(entry, sizeof entry, "%s  %-13s %3d:%02d%s", when, phase_name().c_str(), seconds / 60,
+                 seconds % 60, ended_early ? "  (ended early)" : "");
+        history.push_back(entry);
+    }
+
+    // Finishes a pomodoro and moves to the right kind of break.
+    void go_to_break(bool start_now) {
+        ++pomodoros_done;
+        bool long_break = pomodoros_done % long_break_every == 0;
+        if (long_break) notify("Pomodoro done. Time for a long break.", cfg["sound_long_break"]);
+        else notify("Pomodoro done. Take a short break.", cfg["sound_work_done"]);
+        start_phase(long_break ? LONG_BREAK : SHORT_BREAK, start_now);
+    }
+
+    void go_to_work(bool start_now) { start_phase(WORK, start_now); }
+
+    // Called when the time runs out: log it, alert, and queue the next timer.
+    void finish() {
+        log(false);
+        if (phase == WORK) {
+            go_to_break(false);
+        } else {
+            notify("Break over. Back to work.", cfg["sound_break_done"]);
+            go_to_work(false);
+        }
+    }
+
+    // Skips ahead with b / w. A timer that was actually running is logged as ended early.
+    void skip_to_break() {
+        if (phase != WORK) return;
+        if (!waiting) log(true);
+        go_to_break(true);
+    }
+
+    void skip_to_work() {
+        if (phase == WORK) return;
+        if (!waiting) log(true);
+        go_to_work(true);
+    }
+};
+
+// The prompt shown after pressing + or s, while the user types a number.
+struct NumberPrompt {
+    bool active = false;
+    bool sets_length = false;  // s: set the timer to n minutes; +: add n minutes
+    string digits;
+
+    void open(bool set_length) {
+        active = true;
+        sets_length = set_length;
+        digits.clear();
+    }
+
+    string text() const {
+        return string(sets_length ? "Set minutes: " : "Add minutes: ") + digits + "_   (Enter to " +
+               (sets_length ? "set" : "add") + ", Esc to cancel)";
+    }
+
+    // Handles one key while the prompt is open.
+    void handle_key(char key, Timer &timer) {
+        bool is_enter = key == '\n' || key == '\r';
+        bool is_backspace = key == 127 || key == 8;
+        if (isdigit((unsigned char)key) && digits.size() < 4) {
+            digits += key;
+        } else if (is_backspace && !digits.empty()) {
+            digits.pop_back();
+        } else if (is_enter) {
+            if (!digits.empty()) {
+                double seconds = 60.0 * stoi(digits);
+                if (sets_length) timer.total = timer.left = seconds;
+                else timer.left += seconds;
+            }
+            active = false;
+        } else if (key == 27) {  // Esc
+            active = false;
+        }
+    }
+};
+
+string status_line(const Timer &timer, const NumberPrompt &prompt) {
+    if (prompt.active) return prompt.text();
+    string status = timer.waiting ? "Ready — press space to start" : timer.running ? "Running" : "Paused";
+    if (muted) status += "   [muted]";
+    status += "   (" + to_string(timer.pomodoros_done) + " done, long break every " +
+              to_string(timer.long_break_every) + ")";
+    return status;
+}
+
+vector<string> key_hints(const Timer &timer) {
+    string space_action = timer.running ? "pause" : timer.waiting ? "start" : "resume";
+    string switch_key = timer.phase == WORK ? "b break" : "w work";
+    return {
+        "space " + space_action + "     1/5/0 +1/5/10m     + add n min     s set n min",
+        switch_key + "     m " + (muted ? "unmute" : "mute") + "     v " + (show_bar ? "digits" : "bar") +
+            "     r restart     q quit",
     };
-    auto log = [&](bool early) {  // record the current timer before it's replaced
-        char buf[80], when[8];
-        time_t t = time(nullptr);
-        strftime(when, sizeof when, "%H:%M", localtime(&t));
-        string name = phase == WORK ? "Pomodoro #" + to_string(done + 1) : phase == SHORT ? "Short break" : "Long break";
-        int r = (int)ran;
-        snprintf(buf, sizeof buf, "%s  %-13s %3d:%02d%s", when, name.c_str(), r / 60, r % 60, early ? "  (ended early)" : "");
-        hist.push_back(buf);
-    };
-    auto go_break = [&](bool start) {
-        ++done;
-        bool lng = done % every == 0;
-        notify(lng ? "Pomodoro done. Time for a long break." : "Pomodoro done. Take a short break.",
-               cfg[lng ? "sound_long_break" : "sound_work_done"]);
-        set_phase(lng ? LONG : SHORT, start);
-    };
-    set_phase(WORK, true);
-    auto last = Clock::now();
+}
+
+string rgb(int r, int g, int b) {
+    char code[32];
+    snprintf(code, sizeof code, "\033[38;2;%d;%d;%dm", r, g, b);
+    return code;
+}
+
+Screen build_screen(const Timer &timer, const NumberPrompt &prompt, Clock::time_point now) {
+    Screen s;
+    bool work = timer.phase == WORK;
+    s.title = work ? "POMODORO #" + to_string(timer.pomodoros_done + 1)
+                   : timer.phase == SHORT_BREAK ? "SHORT BREAK" : "LONG BREAK";
+
+    int seconds_left = (int)(timer.left + 0.999);  // round up so 0:00 only shows when it's over
+    char time[16];
+    snprintf(time, sizeof time, "%02d:%02d", seconds_left / 60, seconds_left % 60);
+    s.time = time;
+
+    s.status = status_line(timer, prompt);
+    s.color = work ? "\033[31m" : "\033[32m";  // red for work, green for breaks
+    if (timer.waiting) {
+        // Pulse slowly so it's obvious pomo is waiting for space.
+        const double period = 2.5;  // seconds
+        double t = chrono::duration<double>(now.time_since_epoch()).count();
+        double brightness = 0.6 + 0.4 * cos(t * 2 * M_PI / period);
+        auto scaled = [&](int v) { return (int)(v * brightness); };
+        s.color = work ? rgb(scaled(220), scaled(60), scaled(60)) : rgb(scaled(80), scaled(200), scaled(100));
+        s.status = rgb(scaled(230), scaled(230), scaled(230)) + s.status + RESET;
+    } else if (!timer.running) {
+        s.color = DIM + s.color;  // paused
+    }
+
+    s.keys = key_hints(timer);
+    s.history = timer.history;
+    s.progress = timer.ran / max(1.0, timer.ran + timer.left);
+    return s;
+}
+
+// Reads the rest of an escape sequence after ESC. Returns true if it was one
+// (focus reports update `focused`; anything else, like arrow keys, is ignored),
+// false if it was a lone Esc key press.
+bool read_escape_sequence() {
+    pollfd input{STDIN_FILENO, POLLIN, 0};
+    char seq[2];
+    if (poll(&input, 1, 20) <= 0 || read(STDIN_FILENO, seq, 2) != 2 || seq[0] != '[') return false;
+    if (seq[1] == 'I') focused = true;
+    if (seq[1] == 'O') focused = false;
+    return true;
+}
+
+// Handles one key press outside the number prompt. Returns false to quit.
+bool handle_key(char key, Timer &timer, NumberPrompt &prompt) {
+    switch (key) {
+        case '+': case '=': prompt.open(false); break;
+        case 's': prompt.open(true); break;
+        case '1': timer.left += 60; break;
+        case '5': timer.left += 5 * 60; break;
+        case '0': timer.left += 10 * 60; break;
+        case ' ': case '\n': case 'p':
+            timer.running = !timer.running;
+            timer.waiting = false;
+            break;
+        case 'r':
+            timer.left = timer.total;
+            timer.ran = 0;
+            break;
+        case 'b': timer.skip_to_break(); break;
+        case 'w': timer.skip_to_work(); break;
+        case 'm': muted = !muted; break;
+        case 'v': show_bar = !show_bar; break;
+        case 'q': return false;
+    }
+    return true;
+}
+
+void start_minimized() {
+    focused = false;
+    usleep(200000);  // give the terminal a moment to apply the window title
+    if (!call_extension("Minimize", "")) printf("\033[2t");  // fallback: xterm-style minimize
+}
+
+int main(int argc, char **argv) {
+    load_config();
+    parse_args(argc, argv);
+    if (!validate_config()) return 1;
+
+    setup_terminal();
+    set_window_title(window_tag);  // so the extension can find our window
+    if (cfg["minimized"] == "yes") start_minimized();
+
+    Timer timer;
+    timer.long_break_every = stoi(cfg["every"]);
+    timer.go_to_work(true);
+    NumberPrompt prompt;
+    auto last_tick = Clock::now();
 
     for (;;) {
         auto now = Clock::now();
-        if (running) {
-            double dt = chrono::duration<double>(now - last).count();
-            left -= dt;
-            ran += dt;
+        if (timer.running) {
+            double elapsed = chrono::duration<double>(now - last_tick).count();
+            timer.left -= elapsed;
+            timer.ran += elapsed;
         }
-        last = now;
+        last_tick = now;
+        if (timer.left <= 0) timer.finish();
 
-        if (left <= 0) {
-            log(false);
-            if (phase == WORK) go_break(false);
-            else {
-                notify("Break over. Back to work.", cfg["sound_break_done"]);
-                set_phase(WORK, false);
-            }
-        }
+        draw_screen(build_screen(timer, prompt, now));
 
-        string title = phase == WORK ? "POMODORO #" + to_string(done + 1)
-                     : phase == SHORT ? "SHORT BREAK" : "LONG BREAK";
-        string color = phase == WORK ? "\033[31m" : "\033[32m";
-        string status = typing ? string(setting ? "Set minutes: " : "Add minutes: ") + adding + "_   (Enter to " + (setting ? "set" : "add") + ", Esc to cancel)"
-                      : waiting ? "Ready — press space to start" : running ? "Running" : "Paused";
-        if (!typing && muted) status += "   [muted]";
-        if (!typing) status += "   (" + to_string(done) + " done, long break every " + to_string(every) + ")";
-        if (waiting) {  // slow fade in and out so it's obvious pomo is waiting for space
-            double t = chrono::duration<double>(now.time_since_epoch()).count();
-            double b = 0.6 + 0.4 * cos(t * 2 * M_PI / 2.5);
-            int r = phase == WORK ? 220 : 80, g = phase == WORK ? 60 : 200, bl = phase == WORK ? 60 : 100;
-            char c[32];
-            snprintf(c, sizeof c, "\033[38;2;%d;%d;%dm", (int)(r * b), (int)(g * b), (int)(bl * b));
-            color = c;
-            snprintf(c, sizeof c, "\033[38;2;%d;%d;%dm", (int)(230 * b), (int)(230 * b), (int)(230 * b));
-            status = c + status + "\033[0m";
-        } else if (!running) color = "\033[2m" + color;
-        vector<string> keys = {
-            string("space ") + (running ? "pause" : waiting ? "start" : "resume") +
-                "     1/5/0 +1/5/10m     + add n min     s set n min",
-            string(phase == WORK ? "b break" : "w work") + "     m " + (muted ? "unmute" : "mute") + "     v " + (bar ? "digits" : "bar") + "     r restart     q quit"};
-        draw(title, (int)(left + 0.999), status, color, keys, hist, ran / max(1.0, ran + left), bar);
+        // Wait for a key, redrawing at least every 200 ms (50 ms while pulsing).
+        pollfd input{STDIN_FILENO, POLLIN, 0};
+        if (poll(&input, 1, timer.waiting ? 50 : 200) <= 0) continue;
+        char key;
+        if (read(STDIN_FILENO, &key, 1) != 1) break;
+        if (key == 27 && read_escape_sequence()) continue;
 
-        pollfd p{0, POLLIN, 0};
-        if (poll(&p, 1, waiting ? 50 : 200) > 0) {
-            char k;
-            if (read(0, &k, 1) != 1) break;
-            if (k == 27) {  // escape sequence? focus reports are ESC [ I and ESC [ O
-                char seq[2];
-                pollfd q{0, POLLIN, 0};
-                if (poll(&q, 1, 20) > 0 && read(0, seq, 2) == 2 && seq[0] == '[') {
-                    if (seq[1] == 'I') focused = true;
-                    if (seq[1] == 'O') focused = false;
-                    continue;  // ignore other sequences (arrow keys etc.)
-                }
-            }
-            if (typing) {
-                if (isdigit((unsigned char)k) && adding.size() < 4) adding += k;
-                else if ((k == 127 || k == 8) && !adding.empty()) adding.pop_back();
-                else if (k == '\n' || k == '\r') {
-                    if (!adding.empty() && setting) total = left = 60.0 * stoi(adding);
-                    else if (!adding.empty()) left += 60.0 * stoi(adding);
-                    typing = false;
-                }
-                else if (k == 27) typing = false;
-                continue;
-            }
-            switch (k) {
-                case '+': case '=': typing = true; setting = false; adding.clear(); break;
-                case 's': typing = true; setting = true; adding.clear(); break;
-                case '1': left += 60; break;
-                case 'm': muted = !muted; break;
-                case 'v': bar = !bar; break;
-                case ' ': case '\n': case 'p': running = !running; waiting = false; break;
-                case '5': left += 300; break;
-                case '0': left += 600; break;
-                case 'r': left = total; ran = 0; break;
-                case 'b': if (phase == WORK) { if (!waiting) log(true); go_break(true); } break;
-                case 'w': if (phase != WORK) { if (!waiting) log(true); set_phase(WORK, true); } break;
-                case 'q': return 0;
-            }
-        }
+        if (prompt.active) prompt.handle_key(key, timer);
+        else if (!handle_key(key, timer, prompt)) return 0;
     }
 }
