@@ -381,8 +381,14 @@ void draw_screen(const Screen &s) {
     // Vertically center the whole layout, including as much history as fits.
     // The layout is the same whether or not extras are shown, so the timer
     // doesn't jump around when focus changes.
-    int history_shown = min((int)s.history.size(), max(0, rows - 17));
-    int history_height = history_shown ? history_shown + 2 : 0;
+    int history_room = max(0, rows - 17);
+    int history_shown = min((int)s.history.size(), history_room);
+    // If some entries don't fit, the last visible line becomes "..." instead.
+    bool history_truncated = history_shown < (int)s.history.size() && history_room > 0;
+    if (history_truncated) history_shown = history_room - 1;
+    int history_lines = history_shown + (history_truncated ? 1 : 0);
+    int history_height = history_lines ? history_lines + 2 : 0;
+    bool show_keys = rows > 12;
     int top = max(1, (rows - LAYOUT_HEIGHT - history_height) / 2);
     if (narrow) top = max(-1, (rows - FONT_ROWS) / 2 - 1);  // center just the timer
 
@@ -395,11 +401,13 @@ void draw_screen(const Screen &s) {
     if (show_extras) {
         print_centered(top, BOLD + s.title + RESET, cols);
         print_centered(top + ROW_STATUS, s.status, cols);
-        for (size_t i = 0; i < s.keys.size(); ++i) print_centered(top + ROW_KEYS + i, DIM + s.keys[i] + RESET, cols);
-        if (history_shown) print_centered(top + ROW_HISTORY, string(BOLD) + "History" + RESET, cols);
+        if (show_keys)
+            for (size_t i = 0; i < s.keys.size(); ++i) print_centered(top + ROW_KEYS + i, DIM + s.keys[i] + RESET, cols);
+        if (history_lines) print_centered(top + ROW_HISTORY, string(BOLD) + "History" + RESET, cols);
         for (int i = 0; i < history_shown; ++i) {  // newest first
             print_centered(top + ROW_HISTORY + 1 + i, s.history[s.history.size() - 1 - i], cols);
         }
+        if (history_truncated) print_centered(top + ROW_HISTORY + 1 + history_shown, DIM + string("...") + RESET, cols);
     }
     fflush(stdout);
 }
