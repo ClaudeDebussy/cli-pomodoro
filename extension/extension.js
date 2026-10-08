@@ -57,6 +57,14 @@ export default class PomoExtension extends Extension {
         this._button = null;
     }
 
+    // Click on the bar: minimize pomo if it's the window in front, otherwise bring it up.
+    _toggleWindow() {
+        const w = this._tag && find(this._tag);
+        if (!w) return;
+        if (!w.minimized && global.display.focus_window === w) w.minimize();
+        else Main.activateWindow(w);
+    }
+
     _createButton() {
         this._button = new PanelMenu.Button(0.0, 'pomo', true);
         const track = new St.Widget({
@@ -66,8 +74,8 @@ export default class PomoExtension extends Extension {
         this._fill = new St.Widget({width: 0, height: 8});
         track.add_child(this._fill);
         this._button.add_child(track);
-        this._button.connect('button-press-event', () => {  // click to bring up pomo
-            if (this._tag) this.Activate(this._tag);
+        this._button.connect('button-press-event', () => {
+            this._toggleWindow();
             return Clutter.EVENT_STOP;
         });
         Main.panel.addToStatusArea(this.uuid, this._button);
