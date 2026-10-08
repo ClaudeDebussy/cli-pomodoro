@@ -1,10 +1,12 @@
 # pomo
 
-A terminal pomodoro timer for Linux.
+A terminal pomodoro timer for Linux and Windows.
 
 `pomo` runs a 25-minute work timer and then queues a 5-minute break that waits for you to start it. Every 4th pomodoro, the break it queues is a 15-minute long break instead. Each kind of event plays its own quiet sound and sends a desktop notification. Sounds always play unless you mute them with `m` (or turn them off with `-n desktop` or `-n none`); desktop notifications are skipped while the pomo window has focus, since you can already see it.
 
 ## Install
+
+### Linux
 
 One command, no sudo. It builds pomo, installs it into `~/.local`, and on GNOME installs the extension too. Run it again to update:
 
@@ -20,6 +22,24 @@ sudo make install          # or: system-wide, binary + man page into /usr/local
 ```
 
 Needs a C++17 compiler. Sounds use `pw-play`, `paplay` or `canberra-gtk-play`, whichever is installed. Notifications use `notify-send`.
+
+### Windows
+
+In PowerShell (no admin rights needed). It downloads `pomo.exe` from the latest release into `%LOCALAPPDATA%\Programs\pomo` and adds it to your PATH. Run it again to update:
+
+```
+irm https://raw.githubusercontent.com/ClaudeDebussy/cli-pomodoro/main/install.ps1 | iex
+```
+
+Or build it yourself with MinGW-w64: `make pomo.exe` (cross-compiling from Linux), or `g++ -std=c++17 -O2 -static -o pomo.exe pomo.cpp platform_windows.cpp -lwinmm` on Windows.
+
+Run it in Windows Terminal (the default terminal on Windows 11). On Windows:
+
+- `t` shows the timer's progress on the terminal's taskbar button instead of in a top bar: red during work, green during breaks, yellow while paused.
+- Sounds are `tada.wav`, `chimes.wav` and `chord.wav` from `C:\Windows\Media`. Set your own `.wav` files in the config.
+- Desktop notifications are Windows toasts, sent through PowerShell, so they show up as coming from Windows PowerShell.
+- The config file is `%APPDATA%\pomo\config`.
+- `-m` minimizes the whole Windows Terminal window, including any other tabs in it.
 
 ## Usage
 
@@ -49,7 +69,7 @@ pomo -m              # start minimized, pop back up when a timer ends
 | `s` | set the timer to any number of minutes (e.g. `s 7` Enter) |
 | `m` | mute / unmute sounds |
 | `v` | switch between digits and a progress bar (no numbers) |
-| `t` | show/hide a progress bar in the GNOME top bar (needs the extension); click it to minimize or restore pomo |
+| `t` | show/hide a progress bar in the GNOME top bar (needs the extension; click it to minimize or restore pomo), or on the taskbar button on Windows |
 | `r` | restart the current timer |
 | `b` | start the break now |
 | `w` | start work now |
@@ -59,7 +79,7 @@ A history of finished timers is shown under the timer, newest first. While the w
 
 ## Configuration
 
-Put defaults in `~/.config/pomo/config`:
+Put defaults in `~/.config/pomo/config` (on Windows, `%APPDATA%\pomo\config`):
 
 ```
 work = 25
