@@ -6,9 +6,17 @@ A terminal pomodoro timer for Linux.
 
 ## Install
 
+One command, no sudo. It builds pomo, installs it into `~/.local`, and on GNOME installs the extension too. Run it again to update:
+
 ```
-make
-sudo make install          # binary + man page into /usr/local
+curl -fsSL https://raw.githubusercontent.com/ClaudeDebussy/cli-pomodoro/main/install.sh | sh
+```
+
+Or from a clone of the repo:
+
+```
+./install.sh               # same thing, from this checkout
+sudo make install          # or: system-wide, binary + man page into /usr/local
 ```
 
 Needs a C++17 compiler. Sounds use `pw-play`, `paplay` or `canberra-gtk-play`, whichever is installed. Notifications use `notify-send`.
