@@ -1,0 +1,42 @@
+# Builds pomo on Linux and Windows for every push. For a tag like v1.0, also
+# publishes a GitHub release with pomo.exe attached.
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The runner image includes MinGW-w64's g++.
+      - name: Build pomo.exe
+        run: g++ -std=c++17 -O2 -Wall -static -o pomo.exe pomo.cpp platform_windows.cpp -lwinmm
+      - name: Check that it runs
+        shell: bash
+        run: |
+          ./pomo.exe -h > usage.txt || true
+          grep "usage: pomo" usage.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pomo-windows
+          path: pomo.exe
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" pomo.exe --title "$GITHUB_REF_NAME" --generate-notes

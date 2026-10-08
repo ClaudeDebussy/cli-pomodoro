@@ -2,14 +2,16 @@
 //
 // The file is laid out top to bottom as:
 //   1. configuration (defaults, config file, command line)
-//   2. the GNOME Shell extension bridge and notifications
-//   3. raw terminal setup
-//   4. drawing the screen
-//   5. the timer state and the main loop
+//   2. notifications
+//   3. drawing the screen
+//   4. the timer state and the main loop
+//
+// Everything that depends on the operating system (the terminal, sounds,
+// notifications, window control) is in platform.h, implemented by
+// platform_linux.cpp and platform_windows.cpp.
 #include <cctype>
 #include <cmath>
 #include <chrono>
-#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -17,13 +19,15 @@
 #include <map>
 #include <string>
 #include <vector>
-#include <poll.h>
-#include <sys/ioctl.h>
-#include <termios.h>
-#include <unistd.h>
+
+#include "platform.h"
 
 using namespace std;
 using Clock = chrono::steady_clock;
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 // ============================================================================
 // 1. Configuration
@@ -36,24 +40,17 @@ map<string, string> cfg = {
     {"long", "15"},   // minutes per long break
     {"every", "4"},   // a long break after every this many pomodoros
     {"notify", "both"},   // sound | desktop | both | bell | none
-    {"minimized", "no"},
-    {"topbar", "yes"},    // yes = progress bar in the GNOME top bar (needs the extension)  // yes = start minimized, sticky alert when a timer ends
-    {"sound_work_done", "/usr/share/sounds/freedesktop/stereo/complete.oga"},
-    {"sound_break_done", "/usr/share/sounds/freedesktop/stereo/message.oga"},
-    {"sound_long_break", "/usr/share/sounds/freedesktop/stereo/bell.oga"},
+    {"minimized", "no"},  // yes = start minimized, sticky alert when a timer ends
+    {"topbar", "yes"},    // yes = progress bar in the GNOME top bar / on the Windows taskbar button
+    {"sound_work_done", DEFAULT_SOUND_WORK_DONE},
+    {"sound_break_done", DEFAULT_SOUND_BREAK_DONE},
+    {"sound_long_break", DEFAULT_SOUND_LONG_BREAK},
 };
 
 string trim(string s) {
     s.erase(0, s.find_first_not_of(" \t"));
     s.erase(s.find_last_not_of(" \t") + 1);
     return s;
-}
-
-string config_path() {
-    const char *xdg = getenv("XDG_CONFIG_HOME");
-    if (xdg) return string(xdg) + "/pomo/config";
-    const char *home = getenv("HOME");
-    return string(home ? home : ".") + "/.config/pomo/config";
 }
 
 // Reads "key = value" lines. Blank lines and lines starting with # are ignored.
@@ -74,18 +71,27 @@ void usage() {
     exit(1);
 }
 
-// Command line options override the config file.
+// Command line options override the config file. Options that take a value
+// accept it either attached (-w50) or as the next argument (-w 50).
 void parse_args(int argc, char **argv) {
-    int opt;
-    while ((opt = getopt(argc, argv, "w:s:l:e:n:mh")) != -1) {
-        switch (opt) {
-            case 'w': cfg["work"] = optarg; break;
-            case 's': cfg["short"] = optarg; break;
-            case 'l': cfg["long"] = optarg; break;
-            case 'e': cfg["every"] = optarg; break;
-            case 'n': cfg["notify"] = optarg; break;
-            case 'm': cfg["minimized"] = "yes"; break;
-            default: usage();
+    const map<char, string> value_options = {
+        {'w', "work"}, {'s', "short"}, {'l', "long"}, {'e', "every"}, {'n', "notify"},
+    };
+    for (int i = 1; i < argc; ++i) {
+        string arg = argv[i];
+        if (arg.size() < 2 || arg[0] != '-') usage();
+        char option = arg[1];
+        if (option == 'm' && arg.size() == 2) {
+            cfg["minimized"] = "yes";
+        } else if (value_options.count(option)) {
+            string value = arg.substr(2);
+            if (value.empty()) {
+                if (i + 1 >= argc) usage();
+                value = argv[++i];
+            }
+            cfg[value_options.at(option)] = value;
+        } else {
+            usage();
         }
     }
 }
@@ -105,67 +111,14 @@ bool validate_config() {
 }
 
 // ============================================================================
-// 2. GNOME Shell extension and notifications
+// 2. Notifications
 // ============================================================================
 
-// Window title tag the GNOME extension uses to find our terminal window.
-string window_tag = "pomo [" + to_string(getpid()) + "]";
-
-// Calls a method on the pomo GNOME Shell extension (see extension/).
-// Returns false if the extension isn't installed or the call failed.
-bool call_extension(const string &method, const string &args) {
-    string command = "gdbus call --session -d org.gnome.Shell -o /org/gnome/Shell/Extensions/Pomo "
-                     "-m org.gnome.Shell.Extensions.Pomo." + method +
-                     " -- '" + window_tag + "' " + args + " >/dev/null 2>&1";
-    return system(command.c_str()) == 0;
-}
-
 // Global UI state that both the notifications and the drawing code need.
-bool focused = true;     // does our terminal have focus? (from ESC [ I / ESC [ O reports)
-bool muted = false;      // toggled with m
-bool show_bar = false;   // toggled with v: progress bar instead of digits
-bool show_topbar = true; // toggled with t: progress bar in the GNOME top bar
-
-// Updates the GNOME top bar progress bar. Only calls the extension when what it
-// shows changes, or every couple of seconds so it knows pomo is still running.
-void update_topbar(double progress, const string &color) {
-    static int last_percent = -1;
-    static string last_color;
-    static auto last_sent = chrono::steady_clock::time_point();
-    auto now = chrono::steady_clock::now();
-    int percent = (int)(progress * 1000);  // tenths of a percent
-    if (percent == last_percent && color == last_color && now - last_sent < chrono::seconds(2)) return;
-    last_percent = percent;
-    last_color = color;
-    last_sent = now;
-
-    char fraction[16];
-    snprintf(fraction, sizeof fraction, "%.4f", progress);
-    // In the background, so a slow D-Bus call never stalls the screen.
-    string command = "gdbus call --session -d org.gnome.Shell -o /org/gnome/Shell/Extensions/Pomo "
-                     "-m org.gnome.Shell.Extensions.Pomo.SetProgress -- '" + window_tag + "' " + fraction +
-                     " '" + color + "' >/dev/null 2>&1 &";
-    (void)!system(command.c_str());
-}
-
-void hide_topbar() {
-    call_extension("HideProgress", "");
-}
-
-void play_sound(const string &file) {
-    // Try each common player in turn; fall back to the terminal bell.
-    string command = "(pw-play '" + file + "' || paplay '" + file + "' || canberra-gtk-play -f '" + file +
-                     "' || printf '\\a') >/dev/null 2>&1 &";
-    (void)!system(command.c_str());
-}
-
-void send_desktop_notification(const string &message, bool sticky) {
-    // The extension's notification raises our window when clicked; notify-send's can't on Wayland.
-    if (call_extension("Notify", "'" + message + "' " + (sticky ? "true" : "false"))) return;
-    string urgency = sticky ? "-u critical " : "";
-    string command = "notify-send -a pomo " + urgency + "'Pomodoro' '" + message + "' >/dev/null 2>&1 &";
-    (void)!system(command.c_str());
-}
+// (`focused`, whether our window has focus, is kept up to date by the platform code.)
+bool muted = false;         // toggled with m
+bool show_bar = false;      // toggled with v: progress bar instead of digits
+bool show_progress_indicator = true;  // toggled with t: progress in the top bar / taskbar
 
 // Called when a timer runs out. Sounds always play (unless muted); the
 // window-raising and desktop notification only happen when we're not focused.
@@ -180,47 +133,12 @@ void notify(const string &message, const string &sound) {
     if (focused) return;  // the user is already looking at us
 
     bool sticky = cfg["minimized"] == "yes";
-    if (sticky && !call_extension("Activate", "")) printf("\033[1t");  // fallback: xterm-style un-minimize
+    if (sticky) restore_window();
     if (wants_desktop || sticky) send_desktop_notification(message, sticky);
 }
 
 // ============================================================================
-// 3. Terminal
-// ============================================================================
-
-termios original_termios;
-
-void restore_terminal() {
-    // focus reports off, line wrap on, colors reset, cursor shown, leave alt screen
-    printf("\033[?1004l\033[?7h\033[0m\033[?25h\033[?1049l");
-    fflush(stdout);
-    tcsetattr(STDIN_FILENO, TCSANOW, &original_termios);
-}
-
-void on_signal(int) {
-    restore_terminal();
-    _exit(0);
-}
-
-void setup_terminal() {
-    tcgetattr(STDIN_FILENO, &original_termios);
-    termios raw = original_termios;
-    raw.c_lflag &= ~(ICANON | ECHO);  // read keys one at a time, don't echo them
-    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-    atexit(restore_terminal);
-    signal(SIGINT, on_signal);
-    signal(SIGTERM, on_signal);
-    // alt screen, hide cursor, report focus changes, no line wrap
-    printf("\033[?1049h\033[?25l\033[?1004h\033[?7l");
-}
-
-void set_window_title(const string &title) {
-    printf("\033]0;%s\007", title.c_str());
-    fflush(stdout);
-}
-
-// ============================================================================
-// 4. Drawing
+// 3. Drawing
 // ============================================================================
 
 const char *RESET = "\033[0m";
@@ -273,16 +191,6 @@ struct Screen {
     vector<string> history; // oldest first
     double progress;        // 0..1, for the bar view
 };
-
-struct TerminalSize {
-    int cols, rows;
-};
-
-TerminalSize terminal_size() {
-    winsize size{};
-    ioctl(STDOUT_FILENO, TIOCGWINSZ, &size);
-    return {size.ws_col ? size.ws_col : 80, size.ws_row ? size.ws_row : 24};
-}
 
 // Number of terminal cells a string takes up: skips color codes and counts
 // each UTF-8 character once.
@@ -441,7 +349,7 @@ void draw_screen(const Screen &s) {
 }
 
 // ============================================================================
-// 5. Timer and main loop
+// 4. Timer and main loop
 // ============================================================================
 
 enum Phase { WORK, SHORT_BREAK, LONG_BREAK };
@@ -537,11 +445,11 @@ struct NumberPrompt {
     }
 
     // Handles one key while the prompt is open.
-    void handle_key(char key, Timer &timer) {
+    void handle_key(int key, Timer &timer) {
         bool is_enter = key == '\n' || key == '\r';
         bool is_backspace = key == 127 || key == 8;
-        if (isdigit((unsigned char)key) && digits.size() < 4) {
-            digits += key;
+        if (isdigit(key) && digits.size() < 4) {
+            digits += (char)key;
         } else if (is_backspace && !digits.empty()) {
             digits.pop_back();
         } else if (is_enter) {
@@ -572,7 +480,7 @@ vector<string> key_hints(const Timer &timer) {
     return {
         "space " + space_action + "     1/5/0 +1/5/10m     + add n min     s set n min",
         switch_key + "    m " + (muted ? "unmute" : "mute") + "    v " + (show_bar ? "digits" : "bar") +
-            "    t top bar    r restart    q quit",
+            "    t " + PROGRESS_INDICATOR_NAME + "    r restart    q quit",
     };
 }
 
@@ -613,27 +521,15 @@ Screen build_screen(const Timer &timer, const NumberPrompt &prompt, Clock::time_
     return s;
 }
 
-// Reads the rest of an escape sequence after ESC. Returns true if it was one
-// (focus reports update `focused`; anything else, like arrow keys, is ignored),
-// false if it was a lone Esc key press.
-bool read_escape_sequence() {
-    pollfd input{STDIN_FILENO, POLLIN, 0};
-    char seq[2];
-    if (poll(&input, 1, 20) <= 0 || read(STDIN_FILENO, seq, 2) != 2 || seq[0] != '[') return false;
-    if (seq[1] == 'I') focused = true;
-    if (seq[1] == 'O') focused = false;
-    return true;
-}
-
 // Handles one key press outside the number prompt. Returns false to quit.
-bool handle_key(char key, Timer &timer, NumberPrompt &prompt) {
+bool handle_key(int key, Timer &timer, NumberPrompt &prompt) {
     switch (key) {
         case '+': case '=': prompt.open(false); break;
         case 's': prompt.open(true); break;
         case '1': timer.left += 60; break;
         case '5': timer.left += 5 * 60; break;
         case '0': timer.left += 10 * 60; break;
-        case ' ': case '\n': case 'p':
+        case ' ': case '\n': case '\r': case 'p':
             timer.running = !timer.running;
             timer.waiting = false;
             break;
@@ -646,11 +542,12 @@ bool handle_key(char key, Timer &timer, NumberPrompt &prompt) {
         case 'm': muted = !muted; break;
         case 'v': show_bar = !show_bar; break;
         case 't':
-            show_topbar = !show_topbar;
-            if (!show_topbar) hide_topbar();
+            show_progress_indicator = !show_progress_indicator;
+            if (!show_progress_indicator) hide_progress();
             break;
         case 'q':
-            if (show_topbar) hide_topbar();
+        case 3:  // Ctrl-C (on Windows it arrives as a key, not a signal)
+            if (show_progress_indicator) hide_progress();
             return false;
     }
     return true;
@@ -658,8 +555,8 @@ bool handle_key(char key, Timer &timer, NumberPrompt &prompt) {
 
 void start_minimized() {
     focused = false;
-    usleep(200000);  // give the terminal a moment to apply the window title
-    if (!call_extension("Minimize", "")) printf("\033[2t");  // fallback: xterm-style minimize
+    sleep_ms(200);  // give the terminal a moment to apply the window title
+    minimize_window();
 }
 
 int main(int argc, char **argv) {
@@ -668,9 +565,9 @@ int main(int argc, char **argv) {
     if (!validate_config()) return 1;
 
     setup_terminal();
-    set_window_title(window_tag);  // so the extension can find our window
+    set_window_title(window_title());
     if (cfg["minimized"] == "yes") start_minimized();
-    show_topbar = cfg["topbar"] == "yes";
+    show_progress_indicator = cfg["topbar"] == "yes";
 
     Timer timer;
     timer.long_break_every = stoi(cfg["every"]);
@@ -689,18 +586,17 @@ int main(int argc, char **argv) {
         if (timer.left <= 0) timer.finish();
 
         draw_screen(build_screen(timer, prompt, now));
-        if (show_topbar) {
-            // Red for work, green for breaks; greyed out while paused or waiting.
-            const char *color = !timer.running ? "#888888" : timer.phase == WORK ? "#dc3c3c" : "#50c864";
-            update_topbar(timer.ran / max(1.0, timer.ran + timer.left), color);
+        if (show_progress_indicator) {
+            ProgressState state = !timer.running ? ProgressState::PAUSED
+                                  : timer.phase == WORK ? ProgressState::WORK
+                                                        : ProgressState::BREAK;
+            show_progress(timer.ran / max(1.0, timer.ran + timer.left), state);
         }
 
         // Wait for a key, redrawing at least every 200 ms (50 ms while pulsing).
-        pollfd input{STDIN_FILENO, POLLIN, 0};
-        if (poll(&input, 1, timer.waiting ? 50 : 200) <= 0) continue;
-        char key;
-        if (read(STDIN_FILENO, &key, 1) != 1) break;
-        if (key == 27 && read_escape_sequence()) continue;
+        int key = read_key(timer.waiting ? 50 : 200);
+        if (key == -1) continue;  // no key (or just a focus change)
+        if (key == -2) break;     // input closed
 
         if (prompt.active) prompt.handle_key(key, timer);
         else if (!handle_key(key, timer, prompt)) return 0;
