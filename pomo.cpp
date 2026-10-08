@@ -36,7 +36,8 @@ map<string, string> cfg = {
     {"long", "15"},   // minutes per long break
     {"every", "4"},   // a long break after every this many pomodoros
     {"notify", "both"},   // sound | desktop | both | bell | none
-    {"minimized", "no"},  // yes = start minimized, sticky alert when a timer ends
+    {"minimized", "no"},
+    {"topbar", "yes"},    // yes = progress bar in the GNOME top bar (needs the extension)  // yes = start minimized, sticky alert when a timer ends
     {"sound_work_done", "/usr/share/sounds/freedesktop/stereo/complete.oga"},
     {"sound_break_done", "/usr/share/sounds/freedesktop/stereo/message.oga"},
     {"sound_long_break", "/usr/share/sounds/freedesktop/stereo/bell.oga"},
@@ -123,6 +124,33 @@ bool call_extension(const string &method, const string &args) {
 bool focused = true;     // does our terminal have focus? (from ESC [ I / ESC [ O reports)
 bool muted = false;      // toggled with m
 bool show_bar = false;   // toggled with v: progress bar instead of digits
+bool show_topbar = true; // toggled with t: progress bar in the GNOME top bar
+
+// Updates the GNOME top bar progress bar. Only calls the extension when what it
+// shows changes, or every couple of seconds so it knows pomo is still running.
+void update_topbar(double progress, const string &color) {
+    static int last_percent = -1;
+    static string last_color;
+    static auto last_sent = chrono::steady_clock::time_point();
+    auto now = chrono::steady_clock::now();
+    int percent = (int)(progress * 1000);  // tenths of a percent
+    if (percent == last_percent && color == last_color && now - last_sent < chrono::seconds(2)) return;
+    last_percent = percent;
+    last_color = color;
+    last_sent = now;
+
+    char fraction[16];
+    snprintf(fraction, sizeof fraction, "%.4f", progress);
+    // In the background, so a slow D-Bus call never stalls the screen.
+    string command = "gdbus call --session -d org.gnome.Shell -o /org/gnome/Shell/Extensions/Pomo "
+                     "-m org.gnome.Shell.Extensions.Pomo.SetProgress -- '" + window_tag + "' " + fraction +
+                     " '" + color + "' >/dev/null 2>&1 &";
+    (void)!system(command.c_str());
+}
+
+void hide_topbar() {
+    call_extension("HideProgress", "");
+}
 
 void play_sound(const string &file) {
     // Try each common player in turn; fall back to the terminal bell.
@@ -543,8 +571,8 @@ vector<string> key_hints(const Timer &timer) {
     string switch_key = timer.phase == WORK ? "b break" : "w work";
     return {
         "space " + space_action + "     1/5/0 +1/5/10m     + add n min     s set n min",
-        switch_key + "     m " + (muted ? "unmute" : "mute") + "     v " + (show_bar ? "digits" : "bar") +
-            "     r restart     q quit",
+        switch_key + "    m " + (muted ? "unmute" : "mute") + "    v " + (show_bar ? "digits" : "bar") +
+            "    t top bar    r restart    q quit",
     };
 }
 
@@ -617,7 +645,13 @@ bool handle_key(char key, Timer &timer, NumberPrompt &prompt) {
         case 'w': timer.skip_to_work(); break;
         case 'm': muted = !muted; break;
         case 'v': show_bar = !show_bar; break;
-        case 'q': return false;
+        case 't':
+            show_topbar = !show_topbar;
+            if (!show_topbar) hide_topbar();
+            break;
+        case 'q':
+            if (show_topbar) hide_topbar();
+            return false;
     }
     return true;
 }
@@ -636,6 +670,7 @@ int main(int argc, char **argv) {
     setup_terminal();
     set_window_title(window_tag);  // so the extension can find our window
     if (cfg["minimized"] == "yes") start_minimized();
+    show_topbar = cfg["topbar"] == "yes";
 
     Timer timer;
     timer.long_break_every = stoi(cfg["every"]);
@@ -654,6 +689,11 @@ int main(int argc, char **argv) {
         if (timer.left <= 0) timer.finish();
 
         draw_screen(build_screen(timer, prompt, now));
+        if (show_topbar) {
+            // Red for work, green for breaks; greyed out while paused or waiting.
+            const char *color = !timer.running ? "#888888" : timer.phase == WORK ? "#dc3c3c" : "#50c864";
+            update_topbar(timer.ran / max(1.0, timer.ran + timer.left), color);
+        }
 
         // Wait for a key, redrawing at least every 200 ms (50 ms while pulsing).
         pollfd input{STDIN_FILENO, POLLIN, 0};

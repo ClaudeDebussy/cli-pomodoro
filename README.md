@@ -41,6 +41,7 @@ pomo -m              # start minimized, pop back up when a timer ends
 | `s` | set the timer to any number of minutes (e.g. `s 7` Enter) |
 | `m` | mute / unmute sounds |
 | `v` | switch between digits and a progress bar (no numbers) |
+| `t` | show/hide a progress bar in the GNOME top bar (needs the extension) |
 | `r` | restart the current timer |
 | `b` | start the break now |
 | `w` | start work now |
@@ -59,6 +60,7 @@ long = 15
 every = 4
 notify = both
 minimized = no
+topbar = yes
 ```
 
 See `man pomo` for every setting, including the sound for each event.

@@ -1,6 +1,6 @@
 {
   "uuid": "pomo@ajchurchill",
   "name": "pomo window helper",
-  "description": "Lets the pomo timer minimize/restore its terminal window and show clickable notifications.",
+  "description": "Lets the pomo timer minimize/restore its terminal window show clickable notifications, and show the timer as a progress bar in the top bar.",
   "shell-version": ["45", "46", "47", "48", "49", "50"]
 }

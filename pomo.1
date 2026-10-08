@@ -51,6 +51,11 @@ Mute or unmute sounds and the bell. Desktop notifications still appear.
 .B v
 Switch between the big digits and a progress bar. The bar hides the time left, so there is nothing to watch tick down.
 .TP
+.B t
+Show or hide a progress bar for the timer in the GNOME top bar (needs the extension; see
+.BR "make install-extension" ).
+Grey while paused, red during work, green during breaks. Click it to bring up pomo.
+.TP
 .B r
 Restart the current timer from its full length.
 .TP
@@ -103,6 +108,7 @@ long = 15
 every = 4
 notify = both
 minimized = no
+topbar = yes
 sound_work_done  = /usr/share/sounds/freedesktop/stereo/complete.oga
 sound_break_done = /usr/share/sounds/freedesktop/stereo/message.oga
 sound_long_break = /usr/share/sounds/freedesktop/stereo/bell.oga
