@@ -103,3 +103,11 @@ gnome-extensions enable pomo@ClaudeDebussy
 ```
 
 The extension finds pomo's window by its title, `pomo [PID]`, so the pomo tab has to be the visible tab in its window. Without the extension, pomo sends the standard xterm minimize/restore codes, which only some terminals honor.
+
+## Tests
+
+```
+make test
+```
+
+Runs the unit tests in `tests/test_pomo.cpp`, which build `pomo.cpp` against a fake platform (`tests/fake_platform.cpp`) that records sounds, notifications and window calls, and replays the drawing on a virtual screen. Then runs `tests/test_end_to_end.py`, which drives the real binary in a pseudo-terminal. Linux only; CI runs them on every push.

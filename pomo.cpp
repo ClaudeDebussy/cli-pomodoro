@@ -295,22 +295,22 @@ void draw_progress_bar(const Screen &s, int top, int cols, bool narrow) {
 }
 
 // True for a moment after the terminal changes size.
-bool recently_resized(TerminalSize size) {
+bool recently_resized(TerminalSize size, Clock::time_point now) {
     static TerminalSize last = size;
-    static Clock::time_point resized_at = Clock::now() - chrono::seconds(10);
+    static Clock::time_point resized_at = now - chrono::seconds(10);
     if (size.cols != last.cols || size.rows != last.rows) {
         last = size;
-        resized_at = Clock::now();
+        resized_at = now;
     }
-    return Clock::now() - resized_at < RESIZE_GRACE;
+    return now - resized_at < RESIZE_GRACE;
 }
 
-void draw_screen(const Screen &s) {
+void draw_screen(const Screen &s, Clock::time_point now) {
     TerminalSize size = terminal_size();
     int cols = size.cols, rows = size.rows;
 
     bool narrow = cols < NARROW_WIDTH;
-    bool resizing = recently_resized(size);  // call every frame so it sees every size change
+    bool resizing = recently_resized(size, now);  // call every frame so it sees every size change
     // Unfocused or narrow: just the timer. Everything else is "extras".
     bool show_extras = !narrow && (focused || resizing);
 
@@ -559,6 +559,7 @@ void start_minimized() {
     minimize_window();
 }
 
+#ifndef POMO_TESTING  // the tests (tests/) provide their own main
 int main(int argc, char **argv) {
     load_config();
     parse_args(argc, argv);
@@ -585,7 +586,7 @@ int main(int argc, char **argv) {
         last_tick = now;
         if (timer.left <= 0) timer.finish();
 
-        draw_screen(build_screen(timer, prompt, now));
+        draw_screen(build_screen(timer, prompt, now), now);
         if (show_progress_indicator) {
             ProgressState state = !timer.running ? ProgressState::PAUSED
                                   : timer.phase == WORK ? ProgressState::WORK
@@ -602,3 +603,4 @@ int main(int argc, char **argv) {
         else if (!handle_key(key, timer, prompt)) return 0;
     }
 }
+#endif
