@@ -99,7 +99,7 @@ Wayland doesn't let terminal programs minimize or raise their own window. For `-
 
 ```
 make install-extension     # then log out and back in
-gnome-extensions enable pomo@ajchurchill
+gnome-extensions enable pomo@ClaudeDebussy
 ```
 
 The extension finds pomo's window by its title, `pomo [PID]`, so the pomo tab has to be the visible tab in its window. Without the extension, pomo sends the standard xterm minimize/restore codes, which only some terminals honor.
